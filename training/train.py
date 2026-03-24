@@ -85,7 +85,7 @@ def parse_args():
                    help="Random seed for reproducibility")
 
     # Weights & Biases
-    p.add_argument("--use_wandb", type=str2bool, default=False,
+    p.add_argument("--use_wandb", type=str2bool, default=True,
                    help="Enable logging to Weights & Biases")
     p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
 
@@ -154,7 +154,7 @@ def main():
         wandb_run = wandb.init(
             project="ObjectPromptDA",
             entity="ObjectPromptDA",
-            name=f"{args.run_name}_{args.encoder}_{args.seed}",
+            name=f"{args.run_name}_{args.encoder}_seed{args.seed}",
             dir=ckpt_dir,
             mode=args.wandb_mode,
             config=vars(args),
