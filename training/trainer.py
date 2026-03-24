@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 import torch
@@ -23,6 +24,7 @@ class Trainer:
         scheduler,
         device: torch.device,
         ckpt_dir: str,
+        wandb_run: Any = None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -31,6 +33,7 @@ class Trainer:
         self.ckpt_dir = Path(ckpt_dir)
         self.loss_fn = ScaleAndShiftInvariantLoss()
         self.best_abs_rel = float("inf")
+        self.wandb_run = wandb_run
         self.history = {
             "train_loss": [],
             "val_loss": [],
@@ -190,6 +193,41 @@ class Trainer:
         plt.savefig(self.ckpt_dir / "training_curves.png", dpi=150)
         plt.close()
 
+    def log_wandb_metrics(
+        self,
+        epoch: int,
+        val_loss: float,
+        metrics: dict,
+        train_loss: float | None = None,
+        stage: str = "train",
+    ):
+        """Log metrics to Weights & Biases when a run is available."""
+        if self.wandb_run is None:
+            return
+
+        log_data = {
+            "epoch": epoch,
+            "val/loss": val_loss,
+            "val/AbsRel": metrics["AbsRel"],
+            "val/delta1": metrics["delta1"],
+            "val/delta2": metrics["delta2"],
+            "val/delta3": metrics["delta3"],
+            "stage": stage,
+        }
+
+        if train_loss is not None:
+            log_data["train/loss"] = train_loss
+
+        if self.optimizer is not None:
+            for idx, group in enumerate(self.optimizer.param_groups):
+                log_data[f"lr/group_{idx}"] = float(group.get("lr", 0.0))
+
+            if len(self.optimizer.param_groups) >= 2:
+                log_data["lr/dpt_head"] = float(self.optimizer.param_groups[0].get("lr", 0.0))
+                log_data["lr/mlf"] = float(self.optimizer.param_groups[1].get("lr", 0.0))
+
+        self.wandb_run.log(log_data)
+
     def fit(self, train_loader, val_loader, epochs: int):
         """Run full training and update metrics/checkpoints each epoch."""
         start_epoch = len(self.history["train_loss"]) + 1
@@ -219,5 +257,12 @@ class Trainer:
 
             self.save_checkpoint(epoch, metrics, tag="latest")
             self.plot_history()
+            self.log_wandb_metrics(
+                epoch=epoch,
+                train_loss=train_loss,
+                val_loss=val_loss,
+                metrics=metrics,
+                stage="train",
+            )
 
         Log.info(f"Training done. Best AbsRel = {self.best_abs_rel:.4f}")

@@ -28,6 +28,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import torch
 from torch.utils.data import DataLoader
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
 from dataset.arkitscene import ARKitScenesDataset, collate_fn
 from promptda.promptda import PromptDA
 from promptda.utils.logger import Log
@@ -78,6 +83,11 @@ def parse_args():
     # Seed
     p.add_argument("--seed",           type=int, default=42,
                    help="Random seed for reproducibility")
+
+    # Weights & Biases
+    p.add_argument("--use_wandb", type=str2bool, default=False,
+                   help="Enable logging to Weights & Biases")
+    p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
 
     return p.parse_args()
 
@@ -133,14 +143,32 @@ def main():
         use_mlf=args.use_mlf,
     ).to(device)
 
-    # Trainer
     ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.seed}"
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    # Optional W&B run
+    wandb_run = None
+    if args.use_wandb:
+        if wandb is None:
+            raise ImportError("wandb is not installed. Install it with: pip install wandb")
+        wandb_run = wandb.init(
+            project="ObjectPromptDA",
+            entity="ObjectPromptDA",
+            name=f"{args.run_name}_{args.encoder}_{args.seed}",
+            dir=ckpt_dir,
+            mode=args.wandb_mode,
+            config=vars(args),
+            tags=["mlf" if args.use_mlf else "baseline", args.encoder],
+        )
+
+    # Trainer
     trainer  = Trainer(
         model=model,
         optimizer=None,
         scheduler=None,
         device=device,
         ckpt_dir=ckpt_dir,
+        wandb_run=wandb_run,
     )
 
     # Baseline: zero-shot evaluation on validation split.
@@ -159,9 +187,18 @@ def main():
         trainer.history["delta1"].append(metrics["delta1"])
         trainer.history["delta2"].append(metrics["delta2"])
         trainer.history["delta3"].append(metrics["delta3"])
-        
+
         trainer.plot_history()
         trainer.save_checkpoint(epoch=0, metrics=metrics, tag="baseline_zeroshot")
+        trainer.log_wandb_metrics(
+            epoch=0,
+            train_loss=None,
+            val_loss=val_loss,
+            metrics=metrics,
+            stage="baseline",
+        )
+        if wandb_run is not None:
+            wandb_run.finish()
         return
 
     # Experiment: train MLF on training split and evaluate on validation split.
@@ -185,6 +222,8 @@ def main():
         Log.info(f"Resumed from: {args.resume}")
 
     trainer.fit(train_loader, val_loader, epochs=args.epochs)
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":

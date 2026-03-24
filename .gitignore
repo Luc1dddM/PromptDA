@@ -22,6 +22,7 @@ results/
 checkpoints/
 develop-eggs/
 dist/
+data/ARKitScenes/data
 downloads/
 eggs/
 .eggs/
