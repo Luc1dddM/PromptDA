@@ -1,121 +1,279 @@
-import torch
-import torch.nn as nn
-from promptda.model.dpt import DPTHead
-from promptda.model.config import model_configs
-from promptda.utils.logger import Log
+"""
+promptda/promptda.py
+
+Main PromptDA model class.
+
+Two comparison modes:
+
+  Baseline (use_mlf=False):
+        - Load full PromptDA pretrained weights (DINOv2 + DPT head)
+        - Freeze the whole model
+        - Run zero-shot evaluation on ARKitScenes
+
+  Experiment (use_mlf=True):
+        - Load full PromptDA pretrained weights (DINOv2 + DPT head)
+        - Freeze DINOv2
+        - Train only the MLF projector (random init) on ARKitScenes
+        - Evaluate after training
+"""
+
 import os
 from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
 from huggingface_hub import hf_hub_download
+
+from promptda.model.config import model_configs
+from promptda.model.dpt import DPTHead
+from promptda.model.masked_fusion import MaskedLocalFusion
+from promptda.utils.logger import Log
 
 
 class PromptDA(nn.Module):
-    patch_size = 14  # patch size of the pretrained dinov2 model
-    use_bn = False
-    use_clstoken = False
-    output_act = 'sigmoid'
 
-    def __init__(self,
-                 encoder='vitl',
-                 ckpt_path='checkpoints/promptda_vitl.ckpt'):
+    patch_size   = 14
+    use_bn       = False
+    use_clstoken = False
+    output_act   = 'sigmoid'
+
+    HF_REPOS = {
+        "vits": "depth-anything/prompt-depth-anything-vits",
+        "vitb": "depth-anything/prompt-depth-anything-vitb",
+        "vitl": "depth-anything/prompt-depth-anything-vitl",
+    }
+
+    def __init__(
+        self,
+        encoder: str = 'vitl',
+        ckpt_path: Optional[str] = None,
+        use_mlf: bool = True,
+    ):
         super().__init__()
+        self.encoder = encoder
+        self.use_mlf = use_mlf
         model_config = model_configs[encoder]
 
-        self.encoder = encoder
-        self.model_config = model_config
-        module_path = Path(__file__) # From anywhere else: module_path = Path(inspect.getfile(PromptDA))
-        package_base_dir = str(Path(*module_path.parts[:-2])) # extract path to PromptDA module, then resolve to repo base dir for dinov2 load
-        self.pretrained = torch.hub.load(
+        # Backbone: DINOv2.
+        module_path      = Path(__file__)
+        package_base_dir = str(Path(*module_path.parts[:-2]))
+        self.pretrained  = torch.hub.load(
             f'{package_base_dir}/torchhub/facebookresearch_dinov2_main',
             'dinov2_{:}14'.format(encoder),
             source='local',
-            pretrained=False)
+            pretrained=False,
+        )
         dim = self.pretrained.blocks[0].attn.qkv.in_features
-        self.depth_head = DPTHead(nclass=1,
-                                  in_channels=dim,
-                                  features=model_config['features'],
-                                  out_channels=model_config['out_channels'],
-                                  use_bn=self.use_bn,
-                                  use_clstoken=self.use_clstoken,
-                                  output_act=self.output_act)
 
-        # mean and std of the pretrained dinov2 model
+        # Decoder: DPT head.
+        self.depth_head = DPTHead(
+            nclass=1,
+            in_channels=dim,
+            features=model_config['features'],
+            out_channels=model_config['out_channels'],
+            use_bn=self.use_bn,
+            use_clstoken=self.use_clstoken,
+            output_act=self.output_act,
+        )
+
+        # MLF module is always initialized to keep state_dict shape stable.
+        # When use_mlf=False it is frozen and unused.
+        self.mlf = MaskedLocalFusion(
+            in_channels=dim,
+            roi_output_size=7,
+            sampling_ratio=2,
+        )
+
+        # ImageNet normalization stats.
         self.register_buffer('_mean', torch.tensor(
             [0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer('_std', torch.tensor(
             [0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
-        self.load_checkpoint(ckpt_path)
-    
+        # Load pretrained weights.
+        if ckpt_path is not None:
+            self._load_pretrained_weights(ckpt_path)
+
+        # Apply mode-specific freezing.
+        self._apply_freeze_strategy()
+
+    def _apply_freeze_strategy(self):
+        """
+        Baseline (`use_mlf=False`): freeze all parameters.
+        Experiment (`use_mlf=True`): freeze DINOv2, keep DPT + MLF trainable
+        (DPT is typically assigned zero LR in the optimizer).
+        """
+        if not self.use_mlf:
+            # Freeze all parameters.
+            for p in self.parameters():
+                p.requires_grad = False
+            Log.info("Mode: BASELINE — all parameters frozen, zero-shot evaluation")
+        else:
+            # Freeze backbone only.
+            for p in self.pretrained.parameters():
+                p.requires_grad = False
+            # Keep DPT trainable for gradient flow; optimizer can keep lr=0.
+            for p in self.depth_head.parameters():
+                p.requires_grad = True
+            # MLF is trainable.
+            for p in self.mlf.parameters():
+                p.requires_grad = True
+
+            trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+            total     = sum(p.numel() for p in self.parameters())
+            Log.info(
+                f"Mode: EXPERIMENT — DINOv2 frozen | "
+                f"DPT Head + MLF trainable ({trainable:,} / {total:,} params)"
+            )
+
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path = None, model_kwargs = None, **hf_kwargs):
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: Optional[str] = None,
+        encoder: str = 'vitl',
+        use_mlf: bool = True,
+        **hf_kwargs,
+    ) -> "PromptDA":
         """
-        Load a model from a checkpoint file.
-        ### Parameters:
-        - `pretrained_model_name_or_path`: path to the checkpoint file or repo id.
-        - `model_kwargs`: additional keyword arguments to override the parameters in the checkpoint.
-        - `hf_kwargs`: additional keyword arguments to pass to the `hf_hub_download` function. Ignored if `pretrained_model_name_or_path` is a local path.
-        ### Returns:
-        - A new instance of `MoGe` with the parameters loaded from the checkpoint.
+        Load PromptDA from Hugging Face Hub or a local path.
+
+        Args:
+            pretrained_model_name_or_path:
+                None       → use default repo from `HF_REPOS[encoder]`
+                Local path → load trực tiếp
+                HF repo id → download về cache
+            encoder : 'vits' | 'vitb' | 'vitl'
+            use_mlf : False = baseline, True = experiment
         """
-        ckpt_path = None
+        if pretrained_model_name_or_path is None:
+            pretrained_model_name_or_path = cls.HF_REPOS[encoder]
+
         if Path(pretrained_model_name_or_path).exists():
             ckpt_path = pretrained_model_name_or_path
         else:
-            cached_checkpoint_path = hf_hub_download(
+            ckpt_path = hf_hub_download(
                 repo_id=pretrained_model_name_or_path,
                 repo_type="model",
                 filename="model.ckpt",
-                **hf_kwargs
+                **hf_kwargs,
             )
-            ckpt_path = cached_checkpoint_path
-        # model_config = checkpoint['model_config']
-        # if model_kwargs is not None:
-        #     model_config.update(model_kwargs)
-        if model_kwargs is None:
-            model_kwargs = {}
-        model_kwargs.update({'ckpt_path': ckpt_path})
-        model = cls(**model_kwargs)
-        return model
 
-    def load_checkpoint(self, ckpt_path):
-        if os.path.exists(ckpt_path):
-            Log.info(f'Loading checkpoint from {ckpt_path}')
-            checkpoint = torch.load(ckpt_path, map_location='cpu')
-            self.load_state_dict(
-                {k[9:]: v for k, v in checkpoint['state_dict'].items()})
+        return cls(encoder=encoder, ckpt_path=ckpt_path, use_mlf=use_mlf)
+
+    def _load_pretrained_weights(self, ckpt_path: str):
+        """
+        Load checkpoint with automatic prefix stripping and `strict=False`.
+        Missing MLF keys are expected and remain randomly initialized.
+        """
+        if not os.path.exists(ckpt_path):
+            Log.warn(f"Checkpoint does not exist: {ckpt_path}")
+            return
+
+        Log.info(f'Loading checkpoint: {ckpt_path}')
+        checkpoint = torch.load(ckpt_path, map_location='cpu')
+
+        # Support Lightning format, trainer format, and raw state-dict format.
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
         else:
-            Log.warn(f'Checkpoint {ckpt_path} not found')
+            state_dict = checkpoint
 
-    def forward(self, x, prompt_depth=None):
+        # Strip common module prefix automatically.
+        first_key = next(iter(state_dict))
+        if '.' in first_key:
+            prefix = first_key.split('.')[0] + '.'
+            if all(k.startswith(prefix) for k in state_dict):
+                state_dict = {k[len(prefix):]: v for k, v in state_dict.items()}
+                Log.info(f"Stripped prefix: '{prefix}'")
+
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
+
+        mlf_missing      = [k for k in missing if k.startswith('mlf')]
+        critical_missing = [k for k in missing if not k.startswith('mlf')]
+
+        if critical_missing:
+            Log.warn(f'Missing keys (unexpected): {critical_missing}')
+        if unexpected:
+            Log.warn(f'Unexpected keys: {unexpected}')
+        Log.info(f'MLF keys random init (expected): {len(mlf_missing)}')
+
+    def forward(
+        self,
+        image: torch.Tensor,
+        prompt_depth: torch.Tensor,
+        boxes: Optional[list[torch.Tensor]] = None,
+        return_intermediate: bool = False,
+    ):
         assert prompt_depth is not None, 'prompt_depth is required'
-        prompt_depth, min_val, max_val = self.normalize(prompt_depth)
-        h, w = x.shape[-2:]
-        features = self.pretrained.get_intermediate_layers(
-            (x - self._mean) / self._std, self.model_config['layer_idxs'],
-            return_class_token=True)
-        patch_h, patch_w = h // self.patch_size, w // self.patch_size
-        depth = self.depth_head(features, patch_h, patch_w, prompt_depth)
-        depth = self.denormalize(depth, min_val, max_val)
+
+        prompt_depth, min_val, max_val = self._normalize_prompt(prompt_depth)
+
+        h, w    = image.shape[-2:]
+        patch_h = h // self.patch_size
+        patch_w = w // self.patch_size
+
+        # Backbone is frozen, so run under no_grad.
+        with torch.no_grad():
+            features = list(self.pretrained.get_intermediate_layers(
+                (image - self._mean) / self._std,
+                self.model_config['layer_idxs'],
+                return_class_token=True,
+            ))
+
+        # Use deepest feature map and detach it from frozen backbone graph.
+        deepest_tokens, cls_token = features[-1]
+        f_global = deepest_tokens.permute(0, 2, 1).reshape(
+            deepest_tokens.shape[0],
+            deepest_tokens.shape[-1],
+            patch_h, patch_w,
+        ).detach()
+
+        if self.use_mlf and boxes is not None:
+            # `f_enhanced` carries gradients through MLF when enabled.
+            f_enhanced = self.mlf(f_global, boxes)
+        else:
+            f_enhanced = f_global
+
+        # Replace deepest token map with MLF-enhanced tokens.
+        enhanced_tokens = f_enhanced.flatten(2).permute(0, 2, 1).contiguous()
+
+        # Keep shallow features frozen.
+        with torch.no_grad():
+            frozen_features = features[:-1]
+
+        features_for_head = frozen_features + [(enhanced_tokens, cls_token.detach())]
+
+        # DPT head consumes enhanced tokens to produce final depth.
+        depth = self.depth_head(features_for_head, patch_h, patch_w, prompt_depth)
+        depth = self._denormalize_depth(depth, min_val, max_val)
+
+        if return_intermediate:
+            return depth, f_enhanced
         return depth
 
     @torch.no_grad()
-    def predict(self,
-                image: torch.Tensor,
-                prompt_depth: torch.Tensor):
-        return self.forward(image, prompt_depth)
+    def predict(
+        self,
+        image: torch.Tensor,
+        prompt_depth: torch.Tensor,
+        boxes: Optional[list[torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        return self.forward(image, prompt_depth, boxes=boxes)
 
-    def normalize(self,
-                  prompt_depth: torch.Tensor):
-        B, C, H, W = prompt_depth.shape
-        min_val = torch.quantile(
-            prompt_depth.reshape(B, -1), 0., dim=1, keepdim=True)[:, :, None, None]
-        max_val = torch.quantile(
-            prompt_depth.reshape(B, -1), 1., dim=1, keepdim=True)[:, :, None, None]
-        prompt_depth = (prompt_depth - min_val) / (max_val - min_val)
-        return prompt_depth, min_val, max_val
+    @property
+    def model_config(self):
+        return model_configs[self.encoder]
 
-    def denormalize(self,
-                    depth: torch.Tensor,
-                    min_val: torch.Tensor,
-                    max_val: torch.Tensor):
+    def _normalize_prompt(self, prompt_depth: torch.Tensor):
+        B    = prompt_depth.shape[0]
+        flat = prompt_depth.reshape(B, -1)
+        min_val = flat.quantile(0., dim=1).view(B, 1, 1, 1)
+        max_val = flat.quantile(1., dim=1).view(B, 1, 1, 1)
+        normalized = (prompt_depth - min_val) / (max_val - min_val + 1e-8)
+        return normalized, min_val, max_val
+
+    def _denormalize_depth(self, depth, min_val, max_val):
         return depth * (max_val - min_val) + min_val

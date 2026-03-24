@@ -104,7 +104,7 @@ class DPTHead(nn.Module):
                 act_func,
             )
 
-    def forward(self, out_features, patch_h, patch_w, prompt_depth=None):
+    def forward(self, out_features, patch_h, patch_w, prompt_depth=None, return_intermediate=False):
         out = []
         for i, x in enumerate(out_features):
             if self.use_clstoken:
@@ -142,4 +142,6 @@ class DPTHead(nn.Module):
             out, (int(patch_h * 14), int(patch_w * 14)),
             mode="bilinear", align_corners=True)
         out = self.scratch.output_conv2(out_feat)
+        if return_intermediate:
+            return out, layer_4_rn
         return out

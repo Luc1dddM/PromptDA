@@ -20,7 +20,6 @@ __pycache__/
 build/
 results/
 checkpoints/
-data/
 develop-eggs/
 dist/
 downloads/
@@ -188,3 +187,6 @@ glove
 *.ipynb
 *.ply
 3rdparty
+
+# others 
+promptda/scripts/yolov8n.pt
