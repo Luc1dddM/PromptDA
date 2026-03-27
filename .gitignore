@@ -191,3 +191,4 @@ glove
 
 # others 
 promptda/scripts/yolov8n.pt
+data/

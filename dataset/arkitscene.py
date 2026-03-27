@@ -41,7 +41,6 @@ from torchvision import transforms
 
 from dataset.utils.arkitscene import load_depth_png, sparse_depth_to_prompt, load_boxes, parse_pincam
 
-
 class ARKitScenesDataset(Dataset):
     """
     Args:
@@ -237,4 +236,4 @@ if __name__ == "__main__":
     print("prompt   :", batch["prompt"].shape)    # [2, 1, 192, 256]
     print("boxes[0] :", batch["boxes"][0].shape)  # [N, 4]
     print("boxes[1] :", batch["boxes"][1].shape)
-    print("Smoke-test passed ✓")
+    print("Smoke-test passed ✓")           

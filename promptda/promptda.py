@@ -141,8 +141,8 @@ class PromptDA(nn.Module):
         Args:
             pretrained_model_name_or_path:
                 None       → use default repo from `HF_REPOS[encoder]`
-                Local path → load trực tiếp
-                HF repo id → download về cache
+                Local path → load from path
+                HF repo id → download from Hugging Face Hub
             encoder : 'vits' | 'vitb' | 'vitl'
             use_mlf : False = baseline, True = experiment
         """

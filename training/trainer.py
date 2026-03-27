@@ -38,9 +38,13 @@ class Trainer:
             "train_loss": [],
             "val_loss": [],
             "AbsRel": [],
+            "MAE": [],
+            "RMSE": [],
+            "Log10": [],
             "delta1": [],
             "delta2": [],
             "delta3": [],
+            "SILog": [],
         }
 
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -209,9 +213,13 @@ class Trainer:
             "epoch": epoch,
             "val/loss": val_loss,
             "val/AbsRel": metrics["AbsRel"],
+            "val/MAE": metrics["MAE"],
+            "val/RMSE": metrics["RMSE"],
+            "val/Log10": metrics["Log10"],
             "val/delta1": metrics["delta1"],
             "val/delta2": metrics["delta2"],
             "val/delta3": metrics["delta3"],
+            "val/SILog": metrics["SILog"],
             "stage": stage,
         }
 
@@ -239,9 +247,13 @@ class Trainer:
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
             self.history["AbsRel"].append(metrics["AbsRel"])
+            self.history["MAE"].append(metrics["MAE"])
+            self.history["RMSE"].append(metrics["RMSE"])
+            self.history["Log10"].append(metrics["Log10"])
             self.history["delta1"].append(metrics["delta1"])
             self.history["delta2"].append(metrics["delta2"])
             self.history["delta3"].append(metrics["delta3"])
+            self.history["SILog"].append(metrics["SILog"])
 
             Log.info(
                 f"Epoch {epoch:03d}/{epochs} | "
