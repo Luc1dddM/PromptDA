@@ -191,4 +191,4 @@ glove
 
 # others 
 promptda/scripts/yolov8n.pt
-data/
+data/ARKitScenes/data

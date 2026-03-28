@@ -42,7 +42,7 @@ def parse_args():
     p.add_argument("--encoder",         type=str, default="vitl",
                    choices=["vits", "vitb", "vitl"])
     p.add_argument("--pretrained_path", type=str,
-                   default="/media/lam/Volume3/114MasterYZU/Sem1/CV/PromptDA/baseline-checkpoint/model.ckpt")
+                   default="depth-anything/prompt-depth-anything-vitl")
 
     p.add_argument("--max_size",        type=int, default=1008,
                    help="Max longer-side of image (floored to multiple of 14). "
