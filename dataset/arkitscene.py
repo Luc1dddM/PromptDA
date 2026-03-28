@@ -159,7 +159,7 @@ class ARKitScenesDataset(Dataset):
         rgb = cv2.imread(str(rgb_path), cv2.IMREAD_COLOR)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         rgb = cv2.resize(rgb, (self.img_w, self.img_h), interpolation=cv2.INTER_LINEAR)
-        image = self.normalize(self.to_tensor(rgb))  # [3, H, W]
+        image = self.to_tensor(rgb)  # [3, H, W]
 
         # ── 2. Load GT depth (high-res Faro laser scanner) ───────────────────
         gt_path  = scene_dir / "highres_depth" / f"{ts}.png"

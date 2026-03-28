@@ -26,9 +26,15 @@ def compute_depth_metrics(
         `delta3`: Ratio with threshold < $1.25^3$ (higher is better).
         `SILog`: Scale-invariant logarithmic error (lower is better).
     """
-    mask   = (gt > 0).squeeze(1)          # [B, H, W]
-    pred_m = pred.squeeze(1)[mask]
-    gt_m   = gt.squeeze(1)[mask]
+    # Ensure pred and gt are [B, H, W] by squeezing the channel dimension if it exists
+    if pred.dim() == 4:
+        pred = pred.squeeze(1)
+    if gt.dim() == 4:
+        gt = gt.squeeze(1)
+
+    mask = gt > 0
+    pred_m = pred[mask]
+    gt_m = gt[mask]
 
     if pred_m.numel() == 0:
         return {

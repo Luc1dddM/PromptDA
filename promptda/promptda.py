@@ -1,20 +1,9 @@
 """
 promptda/promptda.py
 
-Main PromptDA model class.
-
-Two comparison modes:
-
-  Baseline (use_mlf=False):
-        - Load full PromptDA pretrained weights (DINOv2 + DPT head)
-        - Freeze the whole model
-        - Run zero-shot evaluation on ARKitScenes
-
-  Experiment (use_mlf=True):
-        - Load full PromptDA pretrained weights (DINOv2 + DPT head)
-        - Freeze DINOv2
-        - Train only the MLF projector (random init) on ARKitScenes
-        - Evaluate after training
+Two modes:
+  Baseline (use_mlf=False): freeze all, zero-shot eval
+  Experiment (use_mlf=True): freeze DINOv2, train MLF projector
 """
 
 import os
@@ -51,11 +40,11 @@ class PromptDA(nn.Module):
         use_mlf: bool = True,
     ):
         super().__init__()
-        self.encoder = encoder
-        self.use_mlf = use_mlf
-        model_config = model_configs[encoder]
+        self.encoder    = encoder
+        self.use_mlf    = use_mlf
+        model_config    = model_configs[encoder]
 
-        # Backbone: DINOv2.
+        # ── Backbone: DINOv2 ──────────────────────────────────────────────
         module_path      = Path(__file__)
         package_base_dir = str(Path(*module_path.parts[:-2]))
         self.pretrained  = torch.hub.load(
@@ -66,7 +55,7 @@ class PromptDA(nn.Module):
         )
         dim = self.pretrained.blocks[0].attn.qkv.in_features
 
-        # Decoder: DPT head.
+        # ── Decoder: DPT head ─────────────────────────────────────────────
         self.depth_head = DPTHead(
             nclass=1,
             in_channels=dim,
@@ -77,46 +66,38 @@ class PromptDA(nn.Module):
             output_act=self.output_act,
         )
 
-        # MLF module is always initialized to keep state_dict shape stable.
-        # When use_mlf=False it is frozen and unused.
+        # ── MLF (always init to keep state_dict shape stable) ─────────────
         self.mlf = MaskedLocalFusion(
             in_channels=dim,
             roi_output_size=7,
             sampling_ratio=2,
         )
 
-        # ImageNet normalization stats.
+        # ── ImageNet normalisation stats ──────────────────────────────────
         self.register_buffer('_mean', torch.tensor(
             [0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer('_std', torch.tensor(
             [0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
-        # Load pretrained weights.
+        # ── Load pretrained weights ───────────────────────────────────────
         if ckpt_path is not None:
             self._load_pretrained_weights(ckpt_path)
 
-        # Apply mode-specific freezing.
+        # ── Freeze strategy ───────────────────────────────────────────────
         self._apply_freeze_strategy()
 
+    # ── Freeze strategy ───────────────────────────────────────────────────
+
     def _apply_freeze_strategy(self):
-        """
-        Baseline (`use_mlf=False`): freeze all parameters.
-        Experiment (`use_mlf=True`): freeze DINOv2, keep DPT + MLF trainable
-        (DPT is typically assigned zero LR in the optimizer).
-        """
         if not self.use_mlf:
-            # Freeze all parameters.
             for p in self.parameters():
                 p.requires_grad = False
             Log.info("Mode: BASELINE — all parameters frozen, zero-shot evaluation")
         else:
-            # Freeze backbone only.
             for p in self.pretrained.parameters():
                 p.requires_grad = False
-            # Keep DPT trainable for gradient flow; optimizer can keep lr=0.
             for p in self.depth_head.parameters():
                 p.requires_grad = True
-            # MLF is trainable.
             for p in self.mlf.parameters():
                 p.requires_grad = True
 
@@ -127,6 +108,8 @@ class PromptDA(nn.Module):
                 f"DPT Head + MLF trainable ({trainable:,} / {total:,} params)"
             )
 
+    # ── Constructors ──────────────────────────────────────────────────────
+
     @classmethod
     def from_pretrained(
         cls,
@@ -135,17 +118,6 @@ class PromptDA(nn.Module):
         use_mlf: bool = True,
         **hf_kwargs,
     ) -> "PromptDA":
-        """
-        Load PromptDA from Hugging Face Hub or a local path.
-
-        Args:
-            pretrained_model_name_or_path:
-                None       → use default repo from `HF_REPOS[encoder]`
-                Local path → load from path
-                HF repo id → download from Hugging Face Hub
-            encoder : 'vits' | 'vitb' | 'vitl'
-            use_mlf : False = baseline, True = experiment
-        """
         if pretrained_model_name_or_path is None:
             pretrained_model_name_or_path = cls.HF_REPOS[encoder]
 
@@ -161,11 +133,9 @@ class PromptDA(nn.Module):
 
         return cls(encoder=encoder, ckpt_path=ckpt_path, use_mlf=use_mlf)
 
+    # ── Checkpoint loading ────────────────────────────────────────────────
+
     def _load_pretrained_weights(self, ckpt_path: str):
-        """
-        Load checkpoint with automatic prefix stripping and `strict=False`.
-        Missing MLF keys are expected and remain randomly initialized.
-        """
         if not os.path.exists(ckpt_path):
             Log.warn(f"Checkpoint does not exist: {ckpt_path}")
             return
@@ -173,7 +143,7 @@ class PromptDA(nn.Module):
         Log.info(f'Loading checkpoint: {ckpt_path}')
         checkpoint = torch.load(ckpt_path, map_location='cpu')
 
-        # Support Lightning format, trainer format, and raw state-dict format.
+        # ── Identical to original: expects 'state_dict' with 'model.' prefix
         if 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
         elif 'model' in checkpoint:
@@ -181,9 +151,13 @@ class PromptDA(nn.Module):
         else:
             state_dict = checkpoint
 
-        # Strip common module prefix automatically.
+        # Strip 9-char prefix 'model.xxx' exactly as original load_checkpoint does
+        # but fall back to generic stripping for flexibility
         first_key = next(iter(state_dict))
-        if '.' in first_key:
+        if first_key.startswith('model.'):
+            state_dict = {k[6:]: v for k, v in state_dict.items()}
+            Log.info("Stripped prefix: 'model.'")
+        elif '.' in first_key:
             prefix = first_key.split('.')[0] + '.'
             if all(k.startswith(prefix) for k in state_dict):
                 state_dict = {k[len(prefix):]: v for k, v in state_dict.items()}
@@ -200,57 +174,50 @@ class PromptDA(nn.Module):
             Log.warn(f'Unexpected keys: {unexpected}')
         Log.info(f'MLF keys random init (expected): {len(mlf_missing)}')
 
+    # ── Forward ───────────────────────────────────────────────────────────
+
     def forward(
         self,
-        image: torch.Tensor,
+        x: torch.Tensor,
         prompt_depth: torch.Tensor,
         boxes: Optional[list[torch.Tensor]] = None,
         return_intermediate: bool = False,
     ):
         assert prompt_depth is not None, 'prompt_depth is required'
 
-        prompt_depth, min_val, max_val = self._normalize_prompt(prompt_depth)
+        prompt_depth, min_val, max_val = self.normalize(prompt_depth)
 
-        h, w    = image.shape[-2:]
+        h, w    = x.shape[-2:]
         patch_h = h // self.patch_size
         patch_w = w // self.patch_size
 
-        # Backbone is frozen, so run under no_grad.
-        with torch.no_grad():
-            features = list(self.pretrained.get_intermediate_layers(
-                (image - self._mean) / self._std,
-                self.model_config['layer_idxs'],
-                return_class_token=True,
-            ))
-
-        # Use deepest feature map and detach it from frozen backbone graph.
-        deepest_tokens, cls_token = features[-1]
-        f_global = deepest_tokens.permute(0, 2, 1).reshape(
-            deepest_tokens.shape[0],
-            deepest_tokens.shape[-1],
-            patch_h, patch_w,
-        ).detach()
+        # ── Backbone forward (identical to original) ──────────────────────
+        features = self.pretrained.get_intermediate_layers(
+            (x - self._mean) / self._std,
+            self.model_config['layer_idxs'],
+            return_class_token=True,
+        )
 
         if self.use_mlf and boxes is not None:
-            # `f_enhanced` carries gradients through MLF when enabled.
-            f_enhanced = self.mlf(f_global, boxes)
-        else:
-            f_enhanced = f_global
+            # Convert tuple→list so we can splice the deepest feature map
+            features = list(features)
 
-        # Replace deepest token map with MLF-enhanced tokens.
-        enhanced_tokens = f_enhanced.flatten(2).permute(0, 2, 1).contiguous()
+            deepest_tokens, cls_token = features[-1]   # (B, N, C)
+            f_global = deepest_tokens.permute(0, 2, 1).reshape(
+                deepest_tokens.shape[0],
+                deepest_tokens.shape[-1],
+                patch_h, patch_w,
+            )                                           # (B, C, pH, pW)
 
-        # Keep shallow features frozen.
-        with torch.no_grad():
-            frozen_features = features[:-1]
+            f_enhanced    = self.mlf(f_global, boxes)  # (B, C, pH, pW)
+            enhanced_tokens = f_enhanced.flatten(2).permute(0, 2, 1).contiguous()
+            features[-1]  = (enhanced_tokens, cls_token)
 
-        features_for_head = frozen_features + [(enhanced_tokens, cls_token.detach())]
+        # ── DPT head (identical call signature to original) ───────────────
+        depth = self.depth_head(features, patch_h, patch_w, prompt_depth)
+        depth = self.denormalize(depth, min_val, max_val)
 
-        # DPT head consumes enhanced tokens to produce final depth.
-        depth = self.depth_head(features_for_head, patch_h, patch_w, prompt_depth)
-        depth = self._denormalize_depth(depth, min_val, max_val)
-
-        if return_intermediate:
+        if return_intermediate and self.use_mlf and boxes is not None:
             return depth, f_enhanced
         return depth
 
@@ -263,17 +230,24 @@ class PromptDA(nn.Module):
     ) -> torch.Tensor:
         return self.forward(image, prompt_depth, boxes=boxes)
 
+    # ── Helpers ───────────────────────────────────────────────────────────
+
     @property
     def model_config(self):
         return model_configs[self.encoder]
 
-    def _normalize_prompt(self, prompt_depth: torch.Tensor):
-        B    = prompt_depth.shape[0]
-        flat = prompt_depth.reshape(B, -1)
-        min_val = flat.quantile(0., dim=1).view(B, 1, 1, 1)
-        max_val = flat.quantile(1., dim=1).view(B, 1, 1, 1)
-        normalized = (prompt_depth - min_val) / (max_val - min_val + 1e-8)
-        return normalized, min_val, max_val
+    def normalize(self, prompt_depth: torch.Tensor):
+        """Identical to original normalize()."""
+        B = prompt_depth.shape[0]
+        min_val = torch.quantile(
+            prompt_depth.reshape(B, -1), 0., dim=1, keepdim=True
+        )[:, :, None, None]
+        max_val = torch.quantile(
+            prompt_depth.reshape(B, -1), 1., dim=1, keepdim=True
+        )[:, :, None, None]
+        prompt_depth = (prompt_depth - min_val) / (max_val - min_val)
+        return prompt_depth, min_val, max_val
 
-    def _denormalize_depth(self, depth, min_val, max_val):
+    def denormalize(self, depth, min_val, max_val):
+        """Identical to original denormalize()."""
         return depth * (max_val - min_val) + min_val
