@@ -23,8 +23,6 @@ import sys
 
 import numpy as np
 
-from torchvision.transforms import Compose
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch
@@ -40,7 +38,6 @@ from promptda.promptda import PromptDA
 from promptda.utils.logger import Log
 from training.optimizer import build_optimizer, build_scheduler
 from training.trainer import Trainer
-from data.ARKitScenes.depth_upsampling import transfroms
 
 
 def str2bool(value: str) -> bool:
@@ -111,11 +108,6 @@ def build_loader(data_root, split, batch_size, num_workers, shuffle):
         root=data_root,
         split=split,
     )
-    if split == "train":
-        transform = Compose([transfroms.RandomCrop(height=patch_size, width=patch_size, upsample_factor=upsample_factor),
-                         transfroms.RandomFilpLR(),
-                         transfroms.ValidDepthMask(gt_low_limit=0.01),
-                         transfroms.AsContiguousArray()])
     loader = DataLoader(
         ds, batch_size=batch_size, shuffle=shuffle,
         num_workers=num_workers, collate_fn=collate_fn, pin_memory=True,
