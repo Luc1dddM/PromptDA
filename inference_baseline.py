@@ -17,11 +17,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import torch.nn.functional as F
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from data.ARKitScenes.depth_upsampling.dataset import ARKitScenesDataset
-from promptda.utils.transforms import ImageTransform, BatchResizeTransform   # <- NEW
+from dataset.dataset import MyARKitScenesDataset
 from promptda.promptda_baseline import PromptDA
 from promptda.utils.logger import Log
 from training.metrics import compute_depth_metrics, aggregate_metrics
@@ -104,21 +104,13 @@ def main():
     # ── Transform ───────────────────────────────────────────────────────── #
     # ImageTransform: resize IMAGE tensor (C,H,W) -> multiple of 14
     # Dataset goi: sample["color_img"] = self.transform(sample["color_img"])
-    img_transform   = ImageTransform(max_size=args.max_size, patch_size=14)
-
-    # BatchResizeTransform: sau DataLoader, resize depth_gt khop voi image
-    batch_transform = BatchResizeTransform(patch_size=14)
-
-    Log.info(f"img_transform : {img_transform}")
-    Log.info(f"batch_transform: {batch_transform}")
 
     # ── Dataset ─────────────────────────────────────────────────────────── #
     Log.info(f"Loading '{args.split}' dataset from: {args.data_root}")
 
-    dataset = ARKitScenesDataset(
+    dataset = MyARKitScenesDataset(
         root=args.data_root,
         split=args.split,
-        transform=img_transform,   # chi resize image, khong phai dict
     )
 
     if args.max_samples is not None:
@@ -138,8 +130,7 @@ def main():
     # ── Model ────────────────────────────────────────────────────────────── #
     Log.info("Loading PromptDA model...")
     model = PromptDA.from_pretrained(
-        pretrained_model_name_or_path=args.pretrained_path,
-        encoder=args.encoder,
+        pretrained_model_name_or_path=args.pretrained_path
     ).to(device).eval()
     Log.info("Model ready.")
 
@@ -149,16 +140,16 @@ def main():
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(loader, desc="Inference")):
 
-            # Resize depth_gt khop voi image (da duoc ImageTransform resize)
-            batch = batch_transform(batch)
-
             image    = batch["color_img"].to(device)           # (B, 3, H, W)
             depth_gt = batch["high_res_depth_img"].to(device)  # (B, 1, H, W)
             prompt   = batch["low_res_depth_img"].to(device)   # (B, 1, h, w)
 
+            bouding_boxes = batch["bounding_box"]                    # list of (B, N, 4)
+            # bouding_boxes = [b.to(device) for b in bouding_boxes]
+            print(bouding_boxes)
+
             pred = run_batch(model, image, prompt)             # (B, 1, H, W)
 
-            # Safety: align neu predict() doi size noi bo
             if pred.shape[-2:] != depth_gt.shape[-2:]:
                 pred = torch.nn.functional.interpolate(
                     pred,

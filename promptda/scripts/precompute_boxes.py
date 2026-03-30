@@ -50,7 +50,7 @@ def main(
     patch_size: int = 14,
     feature_height: Optional[int] = None,
     feature_width: Optional[int] = None,
-    sidecar_suffix: str = ".boxes.json",
+    sidecar_suffix: str = ".json",
     device: str = "cuda",
 ):
     """Precompute YOLO boxes and save sidecar JSONs in feature-map coordinates (xyxy)."""

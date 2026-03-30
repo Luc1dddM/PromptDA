@@ -92,21 +92,20 @@ class PromptDA(nn.Module):
         if not self.use_mlf:
             for p in self.parameters():
                 p.requires_grad = False
-            Log.info("Mode: BASELINE — all parameters frozen, zero-shot evaluation")
         else:
+            # Freeze DINOv2 + DPT head
             for p in self.pretrained.parameters():
                 p.requires_grad = False
             for p in self.depth_head.parameters():
-                p.requires_grad = True
+                p.requires_grad = False   # ← freeze hẳn, không cần lr=0 trick
+
+            # Chỉ train MLF
             for p in self.mlf.parameters():
                 p.requires_grad = True
 
             trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
             total     = sum(p.numel() for p in self.parameters())
-            Log.info(
-                f"Mode: EXPERIMENT — DINOv2 frozen | "
-                f"DPT Head + MLF trainable ({trainable:,} / {total:,} params)"
-            )
+            Log.info(f"Trainable: {trainable:,} / {total:,} params (MLF only)")
 
     # ── Constructors ──────────────────────────────────────────────────────
 

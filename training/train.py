@@ -23,6 +23,8 @@ import sys
 
 import numpy as np
 
+from torchvision.transforms import Compose
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch
@@ -33,11 +35,12 @@ try:
 except ImportError:
     wandb = None
 
-from dataset.arkitscene import ARKitScenesDataset, collate_fn
+from dataset.dataset import MyARKitScenesDataset, collate_fn
 from promptda.promptda import PromptDA
 from promptda.utils.logger import Log
 from training.optimizer import build_optimizer, build_scheduler
 from training.trainer import Trainer
+from data.ARKitScenes.depth_upsampling import transfroms
 
 
 def str2bool(value: str) -> bool:
@@ -48,7 +51,6 @@ def parse_args():
 
     # Data
     p.add_argument("--data_root",   type=str, default="data/ARKitScenes/data/upsampling")
-    p.add_argument("--image_size",  type=int, nargs=2, default=[196, 252])
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--num_workers", type=int, default=4)
 
@@ -104,12 +106,16 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def build_loader(data_root, split, image_size, batch_size, num_workers, shuffle):
-    ds = ARKitScenesDataset(
-        data_root=data_root,
+def build_loader(data_root, split, batch_size, num_workers, shuffle):
+    ds = MyARKitScenesDataset(
+        root=data_root,
         split=split,
-        image_size=tuple(image_size),
     )
+    if split == "train":
+        transform = Compose([transfroms.RandomCrop(height=patch_size, width=patch_size, upsample_factor=upsample_factor),
+                         transfroms.RandomFilpLR(),
+                         transfroms.ValidDepthMask(gt_low_limit=0.01),
+                         transfroms.AsContiguousArray()])
     loader = DataLoader(
         ds, batch_size=batch_size, shuffle=shuffle,
         num_workers=num_workers, collate_fn=collate_fn, pin_memory=True,
@@ -132,8 +138,7 @@ def main():
 
     # Validation loader is required for both baseline and training modes.
     val_loader = build_loader(
-        args.data_root, "Validation", args.image_size,
-        args.batch_size, args.num_workers, shuffle=False,
+        args.data_root, "val", args.batch_size, args.num_workers, shuffle=False,
     )
 
     # Model
@@ -203,8 +208,7 @@ def main():
 
     # Experiment: train MLF on training split and evaluate on validation split.
     train_loader = build_loader(
-        args.data_root, "Training", args.image_size,
-        args.batch_size, args.num_workers, shuffle=True,
+        args.data_root, "train", args.batch_size, args.num_workers, shuffle=True,
     )
 
     optimizer = build_optimizer(model, lr_mlf=args.lr_mlf)

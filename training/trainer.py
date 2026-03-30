@@ -55,10 +55,10 @@ class Trainer:
         total_loss = 0.0
 
         for batch_idx, batch in enumerate(tqdm(loader, desc=f"Train {epoch}", leave=False)):
-            image = batch["image"].to(self.device)
-            depth_gt = batch["depth_gt"].to(self.device)
-            prompt = batch["prompt"].to(self.device)
-            boxes = [b.to(self.device) for b in batch["boxes"]]
+            image    = batch["color_img"].to(self.device)           # (B, 3, H, W)
+            depth_gt = batch["high_res_depth_img"].to(self.device)  # (B, 1, H, W)
+            prompt   = batch["low_res_depth_img"].to(self.device)   # (B, 1, h, w)
+            boxes = [b.to(self.device) for b in batch["bounding_box"]]
 
             # First-batch sanity checks.
             if epoch == 1 and batch_idx == 0:
@@ -71,6 +71,15 @@ class Trainer:
                     )
 
             pred = self.model(image, prompt, boxes)
+
+            if pred.shape[-2:] != depth_gt.shape[-2:]:
+                pred = torch.nn.functional.interpolate(
+                    pred,
+                    size=depth_gt.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
             loss = self.loss_fn(pred, depth_gt)
 
             if self.optimizer is None:
@@ -112,12 +121,21 @@ class Trainer:
         metrics_list = []
 
         for batch in tqdm(loader, desc=f"Val   {epoch}", leave=False):
-            image = batch["image"].to(self.device)
-            depth_gt = batch["depth_gt"].to(self.device)
-            prompt = batch["prompt"].to(self.device)
-            boxes = [b.to(self.device) for b in batch["boxes"]]
+            image    = batch["color_img"].to(self.device)
+            depth_gt = batch["high_res_depth_img"].to(self.device)
+            prompt   = batch["low_res_depth_img"].to(self.device)
+            boxes = [b.to(self.device) for b in batch["bounding_box"]]
 
             pred = self.model(image, prompt, boxes)
+
+            if pred.shape[-2:] != depth_gt.shape[-2:]:
+                pred = torch.nn.functional.interpolate(
+                    pred,
+                    size=depth_gt.shape[-2:],
+                    mode="bilinear",
+                    align_corners=False,
+                )
+
             loss = self.loss_fn(pred, depth_gt)
 
             total_loss += loss.item()
