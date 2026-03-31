@@ -119,6 +119,7 @@ class MyARKitScenesDataset(ARKitScenesDataset):
             boxes_px, img_h, img_w
         )
         sample[dataset_keys.BOUNDING_BOX] = boxes_feat
+        sample[dataset_keys.BOUNDING_BOX_IMAGE] = boxes_px
 
         if self.transform is not None:
             sample[dataset_keys.COLOR_IMG] = self.transform(sample[dataset_keys.COLOR_IMG])
@@ -144,6 +145,8 @@ def collate_fn(batch):
         torch.from_numpy(s[dataset_keys.BOUNDING_BOX]).float()
         for s in batch
     ]
+
+    result[dataset_keys.BOUNDING_BOX_IMAGE] = [torch.from_numpy(s[dataset_keys.BOUNDING_BOX_IMAGE]).float() for s in batch]
 
     result[dataset_keys.IDENTIFIER] = [s[dataset_keys.IDENTIFIER] for s in batch]
     return result

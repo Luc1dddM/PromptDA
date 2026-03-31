@@ -10,7 +10,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from promptda.utils.logger import Log
-from training.loss import ScaleAndShiftInvariantLoss
+from training.loss import CombinedLoss
 from training.metrics import aggregate_metrics, compute_depth_metrics
 
 
@@ -31,7 +31,7 @@ class Trainer:
         self.scheduler = scheduler
         self.device = device
         self.ckpt_dir = Path(ckpt_dir)
-        self.loss_fn = ScaleAndShiftInvariantLoss()
+        self.loss_fn = CombinedLoss()
         self.best_abs_rel = float("inf")
         self.wandb_run = wandb_run
         self.history = {
@@ -58,7 +58,8 @@ class Trainer:
             image    = batch["color_img"].to(self.device)           # (B, 3, H, W)
             depth_gt = batch["high_res_depth_img"].to(self.device)  # (B, 1, H, W)
             prompt   = batch["low_res_depth_img"].to(self.device)   # (B, 1, h, w)
-            boxes = [b.to(self.device) for b in batch["bounding_box"]]
+            boxes = [b.to(self.device) for b in batch["boxes"]]
+            boxes_image = [b.to(self.device) for b in batch.get("boxes_image", [])]
 
             # First-batch sanity checks.
             if epoch == 1 and batch_idx == 0:
@@ -80,7 +81,7 @@ class Trainer:
                     align_corners=False,
                 )
 
-            loss = self.loss_fn(pred, depth_gt)
+            loss, _ = self.loss_fn(pred, depth_gt, boxes_image)
 
             if self.optimizer is None:
                 raise RuntimeError("Optimizer is None in training mode.")
@@ -124,9 +125,11 @@ class Trainer:
             image    = batch["color_img"].to(self.device)
             depth_gt = batch["high_res_depth_img"].to(self.device)
             prompt   = batch["low_res_depth_img"].to(self.device)
-            boxes = [b.to(self.device) for b in batch["bounding_box"]]
 
-            pred = self.model(image, prompt, boxes)
+            boxes_feat  = [b.to(self.device) for b in batch["boxes"]]       
+            boxes_image = [b.to(self.device) for b in batch["boxes_image"]]
+
+            pred = self.model(image, prompt, boxes_feat)
 
             if pred.shape[-2:] != depth_gt.shape[-2:]:
                 pred = torch.nn.functional.interpolate(
@@ -136,7 +139,7 @@ class Trainer:
                     align_corners=False,
                 )
 
-            loss = self.loss_fn(pred, depth_gt)
+            loss, loss_dict = self.loss_fn(pred, depth_gt, boxes_image)
 
             total_loss += loss.item()
             metrics_list.append(compute_depth_metrics(pred, depth_gt))
