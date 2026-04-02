@@ -11,6 +11,7 @@ from promptda.utils.io_wrapper import ensure_multiple_of
 MILLIMETER_TO_METER = 1000
 WIDE = 'wide'
 PATCH_SIZE = 14  # DINOv2 patch size
+TARGET_H, TARGET_W = 756, 1008 
 
 
 class MyARKitScenesDataset(ARKitScenesDataset):
@@ -20,26 +21,25 @@ class MyARKitScenesDataset(ARKitScenesDataset):
 
     # ── Image loading ─────────────────────────────────────────────────────
 
-    def load_image(self, path, shape, is_depth, sky_direction):
+    def load_image(self, path, shape, is_depth, sky_direction, target_hw=None):
         img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
         img = ARKitScenesDataset.rotate_image(img, sky_direction)
 
         if is_depth:
-            img = expand_channel_dim(
-                np.asarray(img / MILLIMETER_TO_METER, np.float32)
-            )
+            img = np.asarray(img / MILLIMETER_TO_METER, np.float32)
+            if target_hw is not None:
+                # INTER_NEAREST preserves real depth values — never interpolate depth
+                img = cv2.resize(img, (target_hw[1], target_hw[0]),
+                                interpolation=cv2.INTER_NEAREST)
+            img = expand_channel_dim(img)
         else:
             img = img / 255.0
-            max_size = 1008 // PATCH_SIZE * PATCH_SIZE  # 1008, already multiple of 14
+            h, w = img.shape[:2]
+            if (h, w) != (TARGET_H, TARGET_W):
+                img = cv2.resize(img, (TARGET_W, TARGET_H),
+                                interpolation=cv2.INTER_AREA)
 
-            if max(img.shape[:2]) > max_size:
-                h, w = img.shape[:2]
-                scale = max_size / max(h, w)
-                tar_h = ensure_multiple_of(h * scale)
-                tar_w = ensure_multiple_of(w * scale)
-                img = cv2.resize(img, (tar_w, tar_h), interpolation=cv2.INTER_AREA)
-
-            img = image_hwc_to_chw(np.asarray(img, np.float32))  # (3, H, W)
+            img = image_hwc_to_chw(np.asarray(img, np.float32))
         return img
 
     # ── Bounding box loading ──────────────────────────────────────────────
@@ -97,7 +97,6 @@ class MyARKitScenesDataset(ARKitScenesDataset):
         video_id, sample_id, direction = self.samples[index]
         sample = {dataset_keys.IDENTIFIER: str(sample_id)}
 
-        # ── File paths ────────────────────────────────────────────────────
         rgb_file   = os.path.join(self.dataset_folder, video_id, WIDE, sample_id)
         depth_file = os.path.join(self.dataset_folder, video_id, 'highres_depth', sample_id)
         apple_file = os.path.join(self.dataset_folder, video_id, 'lowres_depth', sample_id)
@@ -106,19 +105,25 @@ class MyARKitScenesDataset(ARKitScenesDataset):
             sample_id.replace('.png', '.json')
         )
 
-        # ── Load images ───────────────────────────────────────────────────
-        color_img = self.load_image(rgb_file, self.high_res, False, direction)
-        sample[dataset_keys.COLOR_IMG]          = color_img           # (3, H, W)
-        sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(depth_file, self.high_res, True, direction)
-        sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(apple_file, self.low_res,  True, direction)
+        TARGET_HW = (756, 1008)
 
-        # ── Load + scale boxes → feature map space ────────────────────────
-        _, img_h, img_w = color_img.shape
-        boxes_px = self.load_bounding_box(box_file)                   # (N, 4) pixel
-        boxes_feat = self.scale_boxes_to_feature_space(               # (N, 4) feat
-            boxes_px, img_h, img_w
+        # Load RGB first — fixed size
+        color_img = self.load_image(rgb_file, self.high_res, False, direction)
+        _, img_h, img_w = color_img.shape  # will be (3, 756, 1008)
+
+        # Load depths resized to match RGB exactly
+        sample[dataset_keys.COLOR_IMG]          = color_img
+        sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(
+            depth_file, self.high_res, True, direction, target_hw=TARGET_HW
         )
-        sample[dataset_keys.BOUNDING_BOX] = boxes_feat
+        sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(
+            apple_file, self.low_res, True, direction, target_hw=TARGET_HW
+        )
+
+        # Boxes: derived from fixed RGB size, no change needed
+        boxes_px   = self.load_bounding_box(box_file)
+        boxes_feat = self.scale_boxes_to_feature_space(boxes_px, img_h, img_w)
+        sample[dataset_keys.BOUNDING_BOX]       = boxes_feat
         sample[dataset_keys.BOUNDING_BOX_IMAGE] = boxes_px
 
         if self.transform is not None:
