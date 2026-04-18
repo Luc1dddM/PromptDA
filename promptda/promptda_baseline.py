@@ -5,7 +5,6 @@ from promptda.model.config import model_configs
 from promptda.utils.logger import Log
 import os
 from pathlib import Path
-from huggingface_hub import hf_hub_download
 
 
 class PromptDA(nn.Module):
@@ -16,19 +15,21 @@ class PromptDA(nn.Module):
 
     def __init__(self,
                  encoder='vitl',
-                 ckpt_path='checkpoints/promptda_vitl.ckpt'):
+                 ckpt_path=None,
+                 dpt_variant='legacy'):
         super().__init__()
         model_config = model_configs[encoder]
 
         self.encoder = encoder
         self.model_config = model_config
+        self.dpt_variant = dpt_variant
         module_path = Path(__file__) # From anywhere else: module_path = Path(inspect.getfile(PromptDA))
         package_base_dir = str(Path(*module_path.parts[:-2])) # extract path to PromptDA module, then resolve to repo base dir for dinov2 load
         self.pretrained = torch.hub.load(
             f'{package_base_dir}/torchhub/facebookresearch_dinov2_main',
             'dinov2_{:}14'.format(encoder),
             source='local',
-            pretrained=False)
+            pretrained=True)
         dim = self.pretrained.blocks[0].attn.qkv.in_features
         self.depth_head = DPTHead(nclass=1,
                                   in_channels=dim,
@@ -36,7 +37,13 @@ class PromptDA(nn.Module):
                                   out_channels=model_config['out_channels'],
                                   use_bn=self.use_bn,
                                   use_clstoken=self.use_clstoken,
-                                  output_act=self.output_act)
+                                  output_act=self.output_act,
+                                  dpt_variant=self.dpt_variant)
+
+        self._freeze_backbone_only_train_head()
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.parameters())
+        Log.info(f"Trainable: {trainable:,} / {total:,} params (DPT head only)")
 
         # mean and std of the pretrained dinov2 model
         self.register_buffer('_mean', torch.tensor(
@@ -44,47 +51,53 @@ class PromptDA(nn.Module):
         self.register_buffer('_std', torch.tensor(
             [0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
-        self.load_checkpoint(ckpt_path)
-    
+        if ckpt_path is not None:
+            self.load_checkpoint(ckpt_path)
+
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path = None, model_kwargs = None, **hf_kwargs):
-        """
-        Load a model from a checkpoint file.
-        ### Parameters:
-        - `pretrained_model_name_or_path`: path to the checkpoint file or repo id.
-        - `model_kwargs`: additional keyword arguments to override the parameters in the checkpoint.
-        - `hf_kwargs`: additional keyword arguments to pass to the `hf_hub_download` function. Ignored if `pretrained_model_name_or_path` is a local path.
-        ### Returns:
-        - A new instance of `MoGe` with the parameters loaded from the checkpoint.
-        """
-        ckpt_path = None
-        if Path(pretrained_model_name_or_path).exists():
-            ckpt_path = pretrained_model_name_or_path
-        else:
-            cached_checkpoint_path = hf_hub_download(
-                repo_id=pretrained_model_name_or_path,
-                repo_type="model",
-                filename="model.ckpt",
-                **hf_kwargs
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path=None,
+        encoder='vitl',
+        dpt_variant='legacy',
+        **hf_kwargs,
+    ):
+        if hf_kwargs:
+            Log.warn(f"Unused kwargs in baseline from_pretrained: {list(hf_kwargs.keys())}")
+
+        if pretrained_model_name_or_path is not None:
+            Log.warn(
+                "Ignoring pretrained_model_name_or_path in baseline training flow. "
+                "Only DINOv2 backbone pretrained weights are loaded."
             )
-            ckpt_path = cached_checkpoint_path
-        # model_config = checkpoint['model_config']
-        # if model_kwargs is not None:
-        #     model_config.update(model_kwargs)
-        if model_kwargs is None:
-            model_kwargs = {}
-        model_kwargs.update({'ckpt_path': ckpt_path})
-        model = cls(**model_kwargs)
-        return model
+
+        return cls(encoder=encoder, ckpt_path=None, dpt_variant=dpt_variant)
+
+
+    def _freeze_backbone_only_train_head(self):
+        for p in self.pretrained.parameters():
+            p.requires_grad = False
+        for p in self.depth_head.parameters():
+            p.requires_grad = True
+
 
     def load_checkpoint(self, ckpt_path):
         if os.path.exists(ckpt_path):
             Log.info(f'Loading checkpoint from {ckpt_path}')
             checkpoint = torch.load(ckpt_path, map_location='cpu')
-            self.load_state_dict(
-                {k[9:]: v for k, v in checkpoint['state_dict'].items()})
+            state_dict = checkpoint.get('state_dict', checkpoint)
+            if all(k.startswith('model.') for k in state_dict.keys()):
+                state_dict = {k[6:]: v for k, v in state_dict.items()}
+            missing, unexpected = self.load_state_dict(state_dict, strict=False)
+            if missing:
+                Log.warn(f'Missing keys: {missing}')
+            if unexpected:
+                Log.warn(f'Unexpected keys: {unexpected}')
         else:
             Log.warn(f'Checkpoint {ckpt_path} not found')
+
+    def trainable_parameters(self):
+        return [p for p in self.depth_head.parameters() if p.requires_grad]
 
     def forward(self, x, prompt_depth=None):
         assert prompt_depth is not None, 'prompt_depth is required'

@@ -50,28 +50,14 @@ class Trainer:
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     def train_epoch(self, loader, epoch: int) -> float:
-        """Run one training epoch."""
         self.model.train()
         total_loss = 0.0
 
         for batch_idx, batch in enumerate(tqdm(loader, desc=f"Train {epoch}", leave=False)):
-            image    = batch["color_img"].to(self.device)           # (B, 3, H, W)
-            depth_gt = batch["high_res_depth_img"].to(self.device)  # (B, 1, H, W)
-            prompt   = batch["low_res_depth_img"].to(self.device)   # (B, 1, h, w)
-            boxes = [b.to(self.device) for b in batch["boxes"]]
-            boxes_image = [b.to(self.device) for b in batch.get("boxes_image", [])]
-
-            # First-batch sanity checks.
-            if epoch == 1 and batch_idx == 0:
-                total_boxes = sum(len(b) for b in boxes)
-                Log.info(f"[DEBUG] Batch boxes: {[len(b) for b in boxes]} — total={total_boxes}")
-                if total_boxes == 0:
-                    Log.warn(
-                        "[DEBUG] All boxes are empty. MLF may be bypassed. "
-                        "Verify offline box generation."
-                    )
-
-            pred = self.model(image, prompt, boxes)
+            image = batch["color_img"].to(self.device)
+            depth_gt = batch["high_res_depth_img"].to(self.device)
+            prompt = batch["low_res_depth_img"].to(self.device)
+            pred = self.model(image, prompt)
 
             if pred.shape[-2:] != depth_gt.shape[-2:]:
                 pred = torch.nn.functional.interpolate(
@@ -81,27 +67,14 @@ class Trainer:
                     align_corners=False,
                 )
 
-            loss, _ = self.loss_fn(pred, depth_gt, boxes_image)
+            if epoch == 1 and batch_idx == 0:
+                trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+                Log.info(f"[DEBUG] Trainable params: {trainable}")
+
+            loss, _ = self.loss_fn(pred, depth_gt)
 
             if self.optimizer is None:
                 raise RuntimeError("Optimizer is None in training mode.")
-
-            # First-batch gradient sanity check for MLF.
-            if epoch == 1 and batch_idx == 0:
-                self.optimizer.zero_grad()
-                loss.backward()
-                mlf_params = list(self.model.mlf.parameters())
-                grads = [p.grad for p in mlf_params if p.grad is not None]
-                if grads:
-                    grad_norm = sum(g.norm().item() for g in grads)
-                    Log.info(f"[DEBUG] MLF gradient norm = {grad_norm:.6f}")
-                else:
-                    Log.warn("[DEBUG] MLF has no gradients. Check graph and inputs.")
-                self.optimizer.step()
-                if self.scheduler is not None:
-                    self.scheduler.step()
-                total_loss += loss.item()
-                continue
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -116,20 +89,15 @@ class Trainer:
 
     @torch.no_grad()
     def eval_epoch(self, loader, epoch: int) -> tuple[float, dict]:
-        """Run one evaluation epoch."""
         self.model.eval()
         total_loss = 0.0
         metrics_list = []
 
         for batch in tqdm(loader, desc=f"Val   {epoch}", leave=False):
-            image    = batch["color_img"].to(self.device)
+            image = batch["color_img"].to(self.device)
             depth_gt = batch["high_res_depth_img"].to(self.device)
-            prompt   = batch["low_res_depth_img"].to(self.device)
-
-            boxes_feat  = [b.to(self.device) for b in batch["boxes"]]       
-            boxes_image = [b.to(self.device) for b in batch["boxes_image"]]
-
-            pred = self.model(image, prompt, boxes_feat)
+            prompt = batch["low_res_depth_img"].to(self.device)
+            pred = self.model(image, prompt)
 
             if pred.shape[-2:] != depth_gt.shape[-2:]:
                 pred = torch.nn.functional.interpolate(
@@ -139,7 +107,7 @@ class Trainer:
                     align_corners=False,
                 )
 
-            loss, loss_dict = self.loss_fn(pred, depth_gt, boxes_image)
+            loss, _ = self.loss_fn(pred, depth_gt)
 
             total_loss += loss.item()
             metrics_list.append(compute_depth_metrics(pred, depth_gt))
@@ -149,32 +117,40 @@ class Trainer:
         return avg_loss, avg_metrics
 
     def save_checkpoint(self, epoch: int, metrics: dict, tag: str = "latest"):
-        """Save checkpoint state."""
         state = {
             "epoch": epoch,
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict() if self.optimizer is not None else None,
             "metrics": metrics,
             "history": self.history,
+            "best_abs_rel": self.best_abs_rel,
         }
         path = self.ckpt_dir / f"{tag}.pth"
         torch.save(state, path)
         return path
 
     def load_checkpoint(self, path: str):
-        """Load checkpoint state and restore history when available."""
         state = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(state["model"])
+        self.model.load_state_dict(state["model"], strict=False)
         if self.optimizer is not None and state.get("optimizer") is not None:
             self.optimizer.load_state_dict(state["optimizer"])
         if "history" in state:
             self.history = state["history"]
 
-        Log.info(f"Loaded checkpoint from {path} (epoch {state.get('epoch', 'unknown')})")
+        if "best_abs_rel" in state:
+            self.best_abs_rel = state["best_abs_rel"]
+        elif self.history.get("AbsRel"):
+            self.best_abs_rel = min(self.history["AbsRel"])
+        elif state.get("metrics") and "AbsRel" in state["metrics"]:
+            self.best_abs_rel = state["metrics"]["AbsRel"]
+
+        Log.info(
+            f"Loaded checkpoint from {path} (epoch {state.get('epoch', 'unknown')}) | "
+            f"best AbsRel={self.best_abs_rel:.4f}"
+        )
         return state.get("epoch", 0)
 
     def plot_history(self):
-        """Save JSON metrics and a curve figure in the run directory."""
         if len(self.history["val_loss"]) == 0:
             return
 
@@ -226,7 +202,6 @@ class Trainer:
         train_loss: float | None = None,
         stage: str = "train",
     ):
-        """Log metrics to Weights & Biases when a run is available."""
         if self.wandb_run is None:
             return
 
@@ -251,14 +226,9 @@ class Trainer:
             for idx, group in enumerate(self.optimizer.param_groups):
                 log_data[f"lr/group_{idx}"] = float(group.get("lr", 0.0))
 
-            if len(self.optimizer.param_groups) >= 2:
-                log_data["lr/dpt_head"] = float(self.optimizer.param_groups[0].get("lr", 0.0))
-                log_data["lr/mlf"] = float(self.optimizer.param_groups[1].get("lr", 0.0))
-
         self.wandb_run.log(log_data)
 
     def fit(self, train_loader, val_loader, epochs: int):
-        """Run full training and update metrics/checkpoints each epoch."""
         start_epoch = len(self.history["train_loss"]) + 1
 
         for epoch in range(start_epoch, epochs + 1):

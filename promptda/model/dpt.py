@@ -14,11 +14,16 @@ class DPTHead(nn.Module):
                  out_channels=[256, 512, 1024, 1024],
                  use_bn=False,
                  use_clstoken=False,
-                 output_act='sigmoid'):
+                 output_act='sigmoid',
+                 dpt_variant='legacy'):
         super(DPTHead, self).__init__()
 
         self.nclass = nclass
         self.use_clstoken = use_clstoken
+        self.dpt_variant = dpt_variant
+
+        if self.dpt_variant not in {'legacy', 'skip_concat_1x1'}:
+            raise ValueError(f"Unsupported dpt_variant: {self.dpt_variant}")
 
         self.projects = nn.ModuleList([
             nn.Conv2d(
@@ -78,6 +83,11 @@ class DPTHead(nn.Module):
         self.scratch.refinenet4 = _make_fusion_block(
             features, use_bn)
 
+        if self.dpt_variant == 'skip_concat_1x1':
+            self.skip_fuse3 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
+            self.skip_fuse2 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
+            self.skip_fuse1 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
+
         head_features_1 = features
         head_features_2 = 32
 
@@ -131,12 +141,24 @@ class DPTHead(nn.Module):
 
         path_4 = self.scratch.refinenet4(
             layer_4_rn, size=layer_3_rn.shape[2:], prompt_depth=prompt_depth)
-        path_3 = self.scratch.refinenet3(
-            path_4, layer_3_rn, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)
-        path_2 = self.scratch.refinenet2(
-            path_3, layer_2_rn, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
-        path_1 = self.scratch.refinenet1(
-            path_2, layer_1_rn, prompt_depth=prompt_depth)
+
+        if self.dpt_variant == 'skip_concat_1x1':
+            path_3_input = self.skip_fuse3(torch.cat([path_4, layer_3_rn], dim=1))
+            path_3 = self.scratch.refinenet3(
+                path_3_input, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)
+            path_2_input = self.skip_fuse2(torch.cat([path_3, layer_2_rn], dim=1))
+            path_2 = self.scratch.refinenet2(
+                path_2_input, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
+            path_1_input = self.skip_fuse1(torch.cat([path_2, layer_1_rn], dim=1))
+            path_1 = self.scratch.refinenet1(path_1_input, prompt_depth=prompt_depth)
+        else:
+            path_3 = self.scratch.refinenet3(
+                path_4, layer_3_rn, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)
+            path_2 = self.scratch.refinenet2(
+                path_3, layer_2_rn, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
+            path_1 = self.scratch.refinenet1(
+                path_2, layer_1_rn, prompt_depth=prompt_depth)
+
         out = self.scratch.output_conv1(path_1)
         out_feat = F.interpolate(
             out, (int(patch_h * 14), int(patch_w * 14)),
