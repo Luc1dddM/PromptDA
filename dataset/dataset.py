@@ -114,7 +114,7 @@ class MyARKitScenesDataset(ARKitScenesDataset):
         # Load depths resized to match RGB exactly
         sample[dataset_keys.COLOR_IMG]          = color_img
         sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(
-            depth_file, self.high_res, True, direction, target_hw=None
+            depth_file, self.high_res, True, direction, target_hw=self.high_res
         )
         sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(
             apple_file, self.low_res, True, direction, target_hw=TARGET_HW

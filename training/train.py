@@ -131,10 +131,8 @@ def main():
     if args.eval_only:
         val_loss, metrics = trainer.eval_epoch(val_loader, epoch=0)
         Log.info(
-            f"[EVAL] AbsRel={metrics['AbsRel']:.4f} | "
-            f"δ<1.25={metrics['delta1']:.4f} | "
-            f"δ<1.25²={metrics['delta2']:.4f} | "
-            f"δ<1.25³={metrics['delta3']:.4f}"
+            f"[EVAL] L1={metrics['L1']:.4f} | "
+            f"RMSE={metrics['RMSE']:.4f}"
         )
         trainer.log_wandb_metrics(
             epoch=0,

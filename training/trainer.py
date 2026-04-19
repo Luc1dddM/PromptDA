@@ -32,19 +32,14 @@ class Trainer:
         self.device = device
         self.ckpt_dir = Path(ckpt_dir)
         self.loss_fn = CombinedLoss()
-        self.best_abs_rel = float("inf")
+        self.best_l1 = float("inf")
         self.wandb_run = wandb_run
         self.history = {
             "train_loss": [],
             "val_loss": [],
-            "AbsRel": [],
+            "L1": [],
             "MAE": [],
             "RMSE": [],
-            "Log10": [],
-            "delta1": [],
-            "delta2": [],
-            "delta3": [],
-            "SILog": [],
         }
 
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -123,7 +118,7 @@ class Trainer:
             "optimizer": self.optimizer.state_dict() if self.optimizer is not None else None,
             "metrics": metrics,
             "history": self.history,
-            "best_abs_rel": self.best_abs_rel,
+            "best_l1": self.best_l1,
         }
         path = self.ckpt_dir / f"{tag}.pth"
         torch.save(state, path)
@@ -137,16 +132,24 @@ class Trainer:
         if "history" in state:
             self.history = state["history"]
 
-        if "best_abs_rel" in state:
-            self.best_abs_rel = state["best_abs_rel"]
+        if "best_l1" in state:
+            self.best_l1 = state["best_l1"]
+        elif "best_abs_rel" in state:
+            self.best_l1 = state["best_abs_rel"]
+        elif self.history.get("L1"):
+            self.best_l1 = min(self.history["L1"])
+        elif self.history.get("L1"):
+            self.best_l1 = min(self.history["L1"])
         elif self.history.get("AbsRel"):
-            self.best_abs_rel = min(self.history["AbsRel"])
+            self.best_l1 = min(self.history["AbsRel"])
+        elif state.get("metrics") and "L1" in state["metrics"]:
+            self.best_l1 = state["metrics"]["L1"]
         elif state.get("metrics") and "AbsRel" in state["metrics"]:
-            self.best_abs_rel = state["metrics"]["AbsRel"]
+            self.best_l1 = state["metrics"]["AbsRel"]
 
         Log.info(
             f"Loaded checkpoint from {path} (epoch {state.get('epoch', 'unknown')}) | "
-            f"best AbsRel={self.best_abs_rel:.4f}"
+            f"best L1={self.best_l1:.4f}"
         )
         return state.get("epoch", 0)
 
@@ -173,20 +176,18 @@ class Trainer:
         plt.legend()
 
         plt.subplot(2, 2, 2)
-        plt.plot(epochs, self.history["AbsRel"], label="AbsRel", color="red", marker="o")
-        plt.title("AbsRel (lower is better)")
+        plt.plot(epochs, self.history["L1"], label="L1", color="red", marker="o")
+        plt.title("L1 (lower is better)")
         plt.xlabel("Epoch")
-        plt.ylabel("AbsRel")
+        plt.ylabel("L1")
         plt.grid(True)
         plt.legend()
 
         plt.subplot(2, 2, 3)
-        plt.plot(epochs, self.history["delta1"], label=r"$\delta < 1.25$", marker="o")
-        plt.plot(epochs, self.history["delta2"], label=r"$\delta < 1.25^2$", marker="o")
-        plt.plot(epochs, self.history["delta3"], label=r"$\delta < 1.25^3$", marker="o")
-        plt.title("Accuracy")
+        plt.plot(epochs, self.history["RMSE"], label="RMSE", marker="o")
+        plt.title("RMSE (lower is better)")
         plt.xlabel("Epoch")
-        plt.ylabel("Ratio")
+        plt.ylabel("RMSE")
         plt.grid(True)
         plt.legend()
 
@@ -208,14 +209,8 @@ class Trainer:
         log_data = {
             "epoch": epoch,
             "val/loss": val_loss,
-            "val/AbsRel": metrics["AbsRel"],
-            "val/MAE": metrics["MAE"],
+            "val/L1": metrics["L1"],
             "val/RMSE": metrics["RMSE"],
-            "val/Log10": metrics["Log10"],
-            "val/delta1": metrics["delta1"],
-            "val/delta2": metrics["delta2"],
-            "val/delta3": metrics["delta3"],
-            "val/SILog": metrics["SILog"],
             "stage": stage,
         }
 
@@ -237,26 +232,20 @@ class Trainer:
 
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
-            self.history["AbsRel"].append(metrics["AbsRel"])
-            self.history["MAE"].append(metrics["MAE"])
+            self.history["L1"].append(metrics["L1"])
+            self.history["MAE"].append(metrics["L1"])
             self.history["RMSE"].append(metrics["RMSE"])
-            self.history["Log10"].append(metrics["Log10"])
-            self.history["delta1"].append(metrics["delta1"])
-            self.history["delta2"].append(metrics["delta2"])
-            self.history["delta3"].append(metrics["delta3"])
-            self.history["SILog"].append(metrics["SILog"])
 
             Log.info(
                 f"Epoch {epoch:03d}/{epochs} | "
                 f"train={train_loss:.4f} | val={val_loss:.4f} | "
-                f"AbsRel={metrics['AbsRel']:.4f} | "
-                f"δ<1.25={metrics['delta1']:.4f}"
+                f"L1={metrics['L1']:.4f} | RMSE={metrics['RMSE']:.4f}"
             )
 
-            if metrics["AbsRel"] < self.best_abs_rel:
-                self.best_abs_rel = metrics["AbsRel"]
+            if metrics["L1"] < self.best_l1:
+                self.best_l1 = metrics["L1"]
                 self.save_checkpoint(epoch, metrics, tag="best")
-                Log.info(f"  ✓ best.pth saved → AbsRel={self.best_abs_rel:.4f}")
+                Log.info(f"  ✓ best.pth saved → L1={self.best_l1:.4f}")
 
             self.save_checkpoint(epoch, metrics, tag="latest")
             self.plot_history()
@@ -268,4 +257,4 @@ class Trainer:
                 stage="train",
             )
 
-        Log.info(f"Training done. Best AbsRel = {self.best_abs_rel:.4f}")
+        Log.info(f"Training done. Best L1 = {self.best_l1:.4f}")
