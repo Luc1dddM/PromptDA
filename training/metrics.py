@@ -11,7 +11,7 @@ from data.ARKitScenes.depth_upsampling.losses.rmse import rmse_loss
 
 @torch.no_grad()
 def compute_depth_metrics(pred: torch.Tensor, gt: torch.Tensor) -> dict:
-    valid_mask = (gt > 0).to(dtype=gt.dtype)
+    valid_mask = (gt > 0)
 
     inputs = {
         arkit_dataset_keys.HIGH_RES_DEPTH_IMG: gt,

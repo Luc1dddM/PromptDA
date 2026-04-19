@@ -16,7 +16,7 @@ class CombinedLoss(nn.Module):
     def forward(self, pred, target):
         inputs = {
             arkit_dataset_keys.HIGH_RES_DEPTH_IMG: target,
-            arkit_dataset_keys.VALID_MASK_IMG: (target > 0).to(dtype=target.dtype),
+            arkit_dataset_keys.VALID_MASK_IMG: (target > 0),
         }
         outputs = {
             arkit_dataset_keys.PREDICTION_DEPTH_IMG: pred,
