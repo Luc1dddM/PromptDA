@@ -38,10 +38,12 @@ class PromptDA(nn.Module):
         encoder: str = 'vitl',
         ckpt_path: Optional[str] = None,
         use_mlf: bool = True,
+        dpt_variant: str = 'legacy',
     ):
         super().__init__()
         self.encoder    = encoder
         self.use_mlf    = use_mlf
+        self.dpt_variant = dpt_variant
         model_config    = model_configs[encoder]
 
         # ── Backbone: DINOv2 ──────────────────────────────────────────────
@@ -64,6 +66,7 @@ class PromptDA(nn.Module):
             use_bn=self.use_bn,
             use_clstoken=self.use_clstoken,
             output_act=self.output_act,
+            dpt_variant=self.dpt_variant,
         )
 
         # ── MLF (always init to keep state_dict shape stable) ─────────────
@@ -115,6 +118,7 @@ class PromptDA(nn.Module):
         pretrained_model_name_or_path: Optional[str] = None,
         encoder: str = 'vitl',
         use_mlf: bool = True,
+        dpt_variant: str = 'legacy',
         **hf_kwargs,
     ) -> "PromptDA":
         if pretrained_model_name_or_path is None:
@@ -130,7 +134,12 @@ class PromptDA(nn.Module):
                 **hf_kwargs,
             )
 
-        return cls(encoder=encoder, ckpt_path=ckpt_path, use_mlf=use_mlf)
+        return cls(
+            encoder=encoder,
+            ckpt_path=ckpt_path,
+            use_mlf=use_mlf,
+            dpt_variant=dpt_variant,
+        )
 
     # ── Checkpoint loading ────────────────────────────────────────────────
 

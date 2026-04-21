@@ -6,6 +6,57 @@ import torch.nn.functional as F
 from promptda.model.blocks import _make_scratch, _make_fusion_block
 
 
+class CrossAttention2D(nn.Module):
+    def __init__(self, channels: int, num_heads: int):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(channels)
+        self.norm_kv = nn.LayerNorm(channels)
+        self.attn = nn.MultiheadAttention(channels, num_heads=num_heads, batch_first=True)
+
+    def forward(self, query_map: torch.Tensor, kv_map: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = query_map.shape
+        if kv_map.shape[-2:] != (h, w):
+            kv_map = F.interpolate(kv_map, size=(h, w), mode="bilinear", align_corners=False)
+
+        q = query_map.permute(0, 2, 3, 1).reshape(b, h * w, c)
+        kv = kv_map.permute(0, 2, 3, 1).reshape(b, h * w, c)
+
+        qn = self.norm_q(q)
+        kvn = self.norm_kv(kv)
+        attn_out, _ = self.attn(query=qn, key=kvn, value=kvn, need_weights=False)
+        fused = q + attn_out
+        return fused.reshape(b, h, w, c).permute(0, 3, 1, 2).contiguous()
+
+
+def _pick_num_heads(channels: int) -> int:
+    if channels % 8 == 0:
+        return 8
+    if channels % 4 == 0:
+        return 4
+    if channels % 2 == 0:
+        return 2
+    return 1
+
+
+MAX_ATTENTION_TOKENS = 4096
+
+def _maybe_pool_for_attention(x: torch.Tensor, max_tokens: int = MAX_ATTENTION_TOKENS) -> torch.Tensor:
+    h, w = x.shape[-2:]
+    tokens = h * w
+    if tokens <= max_tokens:
+        return x
+    scale = (tokens / max_tokens) ** 0.5
+    new_h = max(1, int(h / scale))
+    new_w = max(1, int(w / scale))
+    return F.interpolate(x, size=(new_h, new_w), mode="bilinear", align_corners=False)
+
+
+def _cross_attend_with_cap(attn: CrossAttention2D, query_map: torch.Tensor, kv_map: torch.Tensor) -> torch.Tensor:
+    kv_small = _maybe_pool_for_attention(kv_map)
+    return attn(query_map, kv_small)
+
+
+
 class DPTHead(nn.Module):
     def __init__(self,
                  nclass,
@@ -22,7 +73,7 @@ class DPTHead(nn.Module):
         self.use_clstoken = use_clstoken
         self.dpt_variant = dpt_variant
 
-        if self.dpt_variant not in {'legacy', 'skip_concat_1x1'}:
+        if self.dpt_variant not in {'legacy', 'skip_concat_1x1', 'hybrid_ca_shallow_concat'}:
             raise ValueError(f"Unsupported dpt_variant: {self.dpt_variant}")
 
         self.projects = nn.ModuleList([
@@ -88,6 +139,15 @@ class DPTHead(nn.Module):
             self.skip_fuse2 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
             self.skip_fuse1 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
 
+        elif self.dpt_variant == 'hybrid_ca_shallow_concat':
+            heads = _pick_num_heads(features)
+            self.cross_attn4 = CrossAttention2D(features, num_heads=heads)
+            self.cross_attn3 = CrossAttention2D(features, num_heads=heads)
+            self.skip_fuse1 = nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0)
+
+            if features % heads != 0:
+                raise ValueError(f"features ({features}) must be divisible by heads ({heads})")
+
         head_features_1 = features
         head_features_2 = 32
 
@@ -149,6 +209,16 @@ class DPTHead(nn.Module):
             path_2_input = self.skip_fuse2(torch.cat([path_3, layer_2_rn], dim=1))
             path_2 = self.scratch.refinenet2(
                 path_2_input, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
+            path_1_input = self.skip_fuse1(torch.cat([path_2, layer_1_rn], dim=1))
+            path_1 = self.scratch.refinenet1(path_1_input, prompt_depth=prompt_depth)
+        elif self.dpt_variant == 'hybrid_ca_shallow_concat':
+            path_4_ca = _cross_attend_with_cap(self.cross_attn4, path_4, layer_3_rn)
+            path_3 = self.scratch.refinenet3(
+                path_4_ca, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)
+            path_3_ca = _cross_attend_with_cap(self.cross_attn3, path_3, layer_2_rn)
+            path_2 = self.scratch.refinenet2(
+                path_3_ca, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
+
             path_1_input = self.skip_fuse1(torch.cat([path_2, layer_1_rn], dim=1))
             path_1 = self.scratch.refinenet1(path_1_input, prompt_depth=prompt_depth)
         else:

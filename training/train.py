@@ -34,7 +34,12 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=4)
 
     p.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl"])
-    p.add_argument("--dpt_variant", type=str, default="legacy", choices=["legacy", "skip_concat_1x1"])
+    p.add_argument(
+        "--dpt_variant",
+        type=str,
+        default="legacy",
+        choices=["legacy", "skip_concat_1x1", "hybrid_ca_shallow_concat"],
+    )
 
     p.add_argument("--run_name", type=str, default="baseline_compare")
     p.add_argument("--epochs", type=int, default=20)
