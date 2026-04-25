@@ -129,9 +129,10 @@ def main():
         wandb_run=wandb_run,
     )
 
-    if args.resume:
-        trainer.load_checkpoint(args.resume)
-        Log.info(f"Resumed from: {args.resume}")
+    if args.eval_only:
+        if args.resume:
+            trainer.load_checkpoint(args.resume)
+            Log.info(f"Resumed from: {args.resume}")
 
     if args.eval_only:
         val_loss, metrics = trainer.eval_epoch(val_loader, epoch=0)
@@ -162,6 +163,10 @@ def main():
     )
     trainer.optimizer = optimizer
     trainer.scheduler = scheduler
+
+    if args.resume:
+        trainer.load_checkpoint(args.resume)
+        Log.info(f"Resumed from: {args.resume}")
 
     trainer.fit(train_loader, val_loader, epochs=args.epochs)
     if wandb_run is not None:

@@ -33,6 +33,8 @@ class Trainer:
         self.ckpt_dir = Path(ckpt_dir)
         self.loss_fn = CombinedLoss()
         self.best_l1 = float("inf")
+        self.global_step = 0
+        self.start_epoch = 1
         self.wandb_run = wandb_run
         self.history = {
             "train_loss": [],
@@ -79,6 +81,7 @@ class Trainer:
                 self.scheduler.step()
 
             total_loss += loss.item()
+            self.global_step += 1
 
         return total_loss / len(loader)
 
@@ -113,9 +116,11 @@ class Trainer:
 
     def save_checkpoint(self, epoch: int, metrics: dict, tag: str = "latest"):
         state = {
-            "epoch": epoch,
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict() if self.optimizer is not None else None,
+            "scheduler": self.scheduler.state_dict() if self.scheduler is not None else None,
+            "epoch": epoch,
+            "global_step": self.global_step,
             "metrics": metrics,
             "history": self.history,
             "best_l1": self.best_l1,
@@ -127,17 +132,24 @@ class Trainer:
     def load_checkpoint(self, path: str):
         state = torch.load(path, map_location=self.device)
         self.model.load_state_dict(state["model"], strict=False)
+
         if self.optimizer is not None and state.get("optimizer") is not None:
             self.optimizer.load_state_dict(state["optimizer"])
+
+        if self.scheduler is not None and state.get("scheduler") is not None:
+            self.scheduler.load_state_dict(state["scheduler"])
+
         if "history" in state:
             self.history = state["history"]
+
+        self.global_step = int(state.get("global_step", 0))
+        last_epoch = int(state.get("epoch", 0))
+        self.start_epoch = last_epoch + 1
 
         if "best_l1" in state:
             self.best_l1 = state["best_l1"]
         elif "best_abs_rel" in state:
             self.best_l1 = state["best_abs_rel"]
-        elif self.history.get("L1"):
-            self.best_l1 = min(self.history["L1"])
         elif self.history.get("L1"):
             self.best_l1 = min(self.history["L1"])
         elif self.history.get("AbsRel"):
@@ -148,10 +160,10 @@ class Trainer:
             self.best_l1 = state["metrics"]["AbsRel"]
 
         Log.info(
-            f"Loaded checkpoint from {path} (epoch {state.get('epoch', 'unknown')}) | "
-            f"best L1={self.best_l1:.4f}"
+            f"Loaded checkpoint from {path} | epoch={last_epoch} | "
+            f"global_step={self.global_step} | best L1={self.best_l1:.4f}"
         )
-        return state.get("epoch", 0)
+        return last_epoch
 
     def plot_history(self):
         if len(self.history["val_loss"]) == 0:
@@ -224,7 +236,7 @@ class Trainer:
         self.wandb_run.log(log_data)
 
     def fit(self, train_loader, val_loader, epochs: int):
-        start_epoch = len(self.history["train_loss"]) + 1
+        start_epoch = self.start_epoch
 
         for epoch in range(start_epoch, epochs + 1):
             train_loss = self.train_epoch(train_loader, epoch)
