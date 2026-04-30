@@ -173,9 +173,30 @@ class ARKitScenesDataset(Dataset):
         # ── 3. Load LiDAR sparse depth → point prompts ────────────────────────
         lidar_path = scene_dir / "lowres_depth" / f"{ts}.png"
         lidar_raw  = load_depth_png(str(lidar_path))
-        lidar_raw  = cv2.resize(lidar_raw, (self.img_w, self.img_h),
-                                interpolation=cv2.INTER_NEAREST)
-        prompt = sparse_depth_to_prompt(lidar_raw)  # [1, H, W], 0 = no info
+        
+        # lidar_raw  = cv2.resize(lidar_raw, (self.img_w, self.img_h),
+        #                         interpolation=cv2.INTER_NEAREST)
+
+        if rgb is not None:
+    # Resize ảnh RGB cho khớp kích thước đích
+            # rgb_resized = cv2.resize(rgb, (self.img_w, self.img_h), interpolation=cv2.INTER_LINEAR)
+            guide = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+            
+            # 3.2 Resize LiDAR thô bằng Nearest trước để bảo toàn tọa độ gốc
+            lidar_resized = cv2.resize(lidar_raw, (self.img_w, self.img_h), interpolation=cv2.INTER_NEAREST)
+            
+            # 3.3 Áp dụng Guided Filter để nội suy lấp đầy khoảng trống mà vẫn sắc cạnh
+            lidar_processed = cv2.ximgproc.guidedFilter(
+                guide=guide,
+                src=lidar_resized.astype(np.float32),
+                radius=8,    # Bán kính cửa sổ nội suy (tăng lên nếu ảnh quá thưa)
+                eps=0.01     # Hệ số giữ cạnh (càng nhỏ cạnh càng sắc nét)
+            )
+        else:
+            # Fallback nếu không tìm thấy ảnh RGB
+            lidar_processed = cv2.resize(lidar_raw, (self.img_w, self.img_h), interpolation=cv2.INTER_NEAREST)
+        
+        prompt = sparse_depth_to_prompt(lidar_processed)  # [1, H, W], 0 = no info
 
         # ── 4. Load bounding boxes (YOLOv8 offline sidecar) ──────────────────
         # boxes_xyxy_feature inside the JSON is already in feature-map coords
