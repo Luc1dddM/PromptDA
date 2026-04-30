@@ -72,17 +72,26 @@ class Trainer:
             if self.optimizer is None:
                 raise RuntimeError("Optimizer is None in training mode.")
 
-            # First-batch gradient sanity check for MLF.
+            # First-batch gradient sanity check.
             if epoch == 1 and batch_idx == 0:
                 self.optimizer.zero_grad()
                 loss.backward()
-                mlf_params = list(self.model.mlf.parameters())
-                grads = [p.grad for p in mlf_params if p.grad is not None]
-                if grads:
-                    grad_norm = sum(g.norm().item() for g in grads)
-                    Log.info(f"[DEBUG] MLF gradient norm = {grad_norm:.6f}")
+                if hasattr(self.model, "mlf"):
+                    mlf_params = list(self.model.mlf.parameters())
+                    grads = [p.grad for p in mlf_params if p.grad is not None]
+                    if grads:
+                        grad_norm = sum(g.norm().item() for g in grads)
+                        Log.info(f"[DEBUG] MLF gradient norm = {grad_norm:.6f}")
+                    else:
+                        Log.warn("[DEBUG] MLF has no gradients. Check graph and inputs.")
                 else:
-                    Log.warn("[DEBUG] MLF has no gradients. Check graph and inputs.")
+                    trainable_params = [p for p in self.model.parameters() if p.requires_grad]
+                    grads = [p.grad for p in trainable_params if p.grad is not None]
+                    if grads:
+                        grad_norm = sum(g.norm().item() for g in grads)
+                        Log.info(f"[DEBUG] model gradient norm = {grad_norm:.6f}")
+                    else:
+                        Log.warn("[DEBUG] Model has no gradients. Check graph and inputs.")
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()

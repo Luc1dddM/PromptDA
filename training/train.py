@@ -1,7 +1,7 @@
 """
 training/train.py
 
-Entry point for PromptDA baseline evaluation and MLF training.
+Entry point for PromptDA baseline evaluation, MLF training, and full model training from scratch.
 
 Dataset split convention:
   data/ARKitScenes/Training/   → train
@@ -14,6 +14,9 @@ Reference commands:
 
     # Experiment: train only the MLF projector
   python training/train.py --use_mlf true --run_name mlf
+
+    # Full training: train entire model from scratch without MLF
+  python training/train.py --from_scratch true --use_mlf false --run_name full_training
 """
 
 import argparse
@@ -67,11 +70,21 @@ def parse_args():
         default=True,
         help="false = baseline (zero-shot) | true = train MLF projector",
     )
+    p.add_argument(
+        "--from_scratch",
+        type=str2bool,
+        default=False,
+        help="true = train entire model from scratch (DINOv2 + DPT) | false = use pretrained weights",
+    )
 
-    # Training (used only when --use_mlf=true)
+    # Training (used only when training is enabled)
     p.add_argument("--run_name",       type=str,   default="experiment")
     p.add_argument("--epochs",         type=int,   default=20)
     p.add_argument("--batch_size",     type=int,   default=4)
+    p.add_argument("--lr_backbone",   type=float, default=1e-5,
+                   help="Learning rate for DINOv2 backbone (from_scratch mode)")
+    p.add_argument("--lr_head",       type=float, default=1e-4,
+                   help="Learning rate for DPT head")
     p.add_argument("--lr_mlf",         type=float, default=1e-4,
                    help="Learning rate for the MLF projector")
 
@@ -127,7 +140,16 @@ def main():
     Log.info(f"Device  : {device}")
     Log.info(f"Seed    : {args.seed}")
     Log.info(f"Run     : {args.run_name}")
-    Log.info(f"Mode    : {'EXPERIMENT (train MLF)' if args.use_mlf else 'BASELINE (zero-shot)'}")
+
+    # Determine training mode
+    if args.from_scratch:
+        mode_str = "FROM_SCRATCH (train DINOv2 + DPT)"
+    elif not args.use_mlf:
+        mode_str = "BASELINE (zero-shot)"
+    else:
+        mode_str = "EXPERIMENT (train MLF)"
+
+    Log.info(f"Mode    : {mode_str}")
     Log.info(f"Encoder : {args.encoder}")
 
     # Validation loader is required for both baseline and training modes.
@@ -141,6 +163,7 @@ def main():
         pretrained_model_name_or_path=args.pretrained_path,
         encoder=args.encoder,
         use_mlf=args.use_mlf,
+        from_scratch=args.from_scratch,
     ).to(device)
 
     ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.seed}"
@@ -172,7 +195,8 @@ def main():
     )
 
     # Baseline: zero-shot evaluation on validation split.
-    if not args.use_mlf:
+    # Only baseline when NOT training from scratch.
+    if (not args.use_mlf) and (not args.from_scratch):
         Log.info("Baseline: running zero-shot evaluation on validation split...")
         val_loss, metrics = trainer.eval_epoch(val_loader, epoch=0)
         Log.info(
@@ -201,17 +225,28 @@ def main():
             wandb_run.finish()
         return
 
-    # Experiment: train MLF on training split and evaluate on validation split.
+    # Training mode: either MLF-only experiment or full training from scratch.
     train_loader = build_loader(
         args.data_root, "Training", args.image_size,
         args.batch_size, args.num_workers, shuffle=True,
     )
 
-    optimizer = build_optimizer(model, lr_mlf=args.lr_mlf)
+    optimizer = build_optimizer(
+        model,
+        use_mlf=args.use_mlf,
+        from_scratch=args.from_scratch,
+        lr_backbone=args.lr_backbone,
+        lr_head=args.lr_head,
+        lr_mlf=args.lr_mlf,
+    )
     scheduler = build_scheduler(
         optimizer,
+        use_mlf=args.use_mlf,
+        from_scratch=args.from_scratch,
         steps_per_epoch=len(train_loader),
         epochs=args.epochs,
+        lr_backbone=args.lr_backbone,
+        lr_head=args.lr_head,
         lr_mlf=args.lr_mlf,
     )
     trainer.optimizer = optimizer
