@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from promptda.utils.logger import Log
 from training.loss import CombinedLoss
+from training.loss_laplace import RobustLaplaceNLLLoss
 from training.metrics import aggregate_metrics, compute_depth_metrics
 
 
@@ -25,13 +26,15 @@ class Trainer:
         device: torch.device,
         ckpt_dir: str,
         wandb_run: Any = None,
+        uncertainty: bool = False,
     ):
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = device
         self.ckpt_dir = Path(ckpt_dir)
-        self.loss_fn = CombinedLoss()
+        self.uncertainty = uncertainty
+        self.loss_fn = RobustLaplaceNLLLoss() if uncertainty else CombinedLoss()
         self.best_l1 = float("inf")
         self.global_step = 0
         self.start_epoch = 1
@@ -56,19 +59,30 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            if pred.shape[-2:] != depth_gt.shape[-2:]:
-                pred = torch.nn.functional.interpolate(
-                    pred,
-                    size=depth_gt.shape[-2:],
-                    mode="bilinear",
-                    align_corners=False,
-                )
+            # Extract depth for resize alignment (handle both tensor and dict output)
+            pred_depth = pred["mu"] if isinstance(pred, dict) else pred
+            if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
+                if isinstance(pred, dict):
+                    pred["mu"] = torch.nn.functional.interpolate(
+                        pred_depth, size=depth_gt.shape[-2:],
+                        mode="bilinear", align_corners=False,
+                    )
+                    if "s" in pred:
+                        pred["s"] = torch.nn.functional.interpolate(
+                            pred["s"], size=depth_gt.shape[-2:],
+                            mode="bilinear", align_corners=False,
+                        )
+                else:
+                    pred = torch.nn.functional.interpolate(
+                        pred, size=depth_gt.shape[-2:],
+                        mode="bilinear", align_corners=False,
+                    )
 
             if epoch == 1 and batch_idx == 0:
                 trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
                 Log.info(f"[DEBUG] Trainable params: {trainable}")
 
-            loss, _ = self.loss_fn(pred, depth_gt)
+            loss, loss_info = self.loss_fn(pred, depth_gt)
 
             if self.optimizer is None:
                 raise RuntimeError("Optimizer is None in training mode.")
@@ -97,18 +111,31 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            if pred.shape[-2:] != depth_gt.shape[-2:]:
-                pred = torch.nn.functional.interpolate(
-                    pred,
-                    size=depth_gt.shape[-2:],
-                    mode="bilinear",
-                    align_corners=False,
-                )
+            # Extract depth tensor for resize and metrics
+            pred_depth = pred["mu"] if isinstance(pred, dict) else pred
+            if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
+                if isinstance(pred, dict):
+                    pred["mu"] = torch.nn.functional.interpolate(
+                        pred_depth, size=depth_gt.shape[-2:],
+                        mode="bilinear", align_corners=False,
+                    )
+                    if "s" in pred:
+                        pred["s"] = torch.nn.functional.interpolate(
+                            pred["s"], size=depth_gt.shape[-2:],
+                            mode="bilinear", align_corners=False,
+                        )
+                else:
+                    pred = torch.nn.functional.interpolate(
+                        pred, size=depth_gt.shape[-2:],
+                        mode="bilinear", align_corners=False,
+                    )
 
             loss, _ = self.loss_fn(pred, depth_gt)
 
             total_loss += loss.item()
-            metrics_list.append(compute_depth_metrics(pred, depth_gt))
+            # compute_depth_metrics expects a tensor — pass mu for uncertainty, pred for legacy
+            metrics_input = pred["mu"] if isinstance(pred, dict) else pred
+            metrics_list.append(compute_depth_metrics(metrics_input, depth_gt))
 
         avg_loss = total_loss / len(loader)
         avg_metrics = aggregate_metrics(metrics_list)

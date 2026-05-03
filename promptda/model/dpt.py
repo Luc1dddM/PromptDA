@@ -153,7 +153,8 @@ class DPTHead(nn.Module):
 
         act_func = nn.Sigmoid() if output_act == 'sigmoid' else nn.Identity()
 
-        if nclass > 1:
+        if nclass > 2:
+            # Multi-class segmentation head (e.g. semantic classes)
             self.scratch.output_conv = nn.Sequential(
                 nn.Conv2d(head_features_1, head_features_1,
                           kernel_size=3, stride=1, padding=1),
@@ -162,6 +163,10 @@ class DPTHead(nn.Module):
                           kernel_size=1, stride=1, padding=0),
             )
         else:
+            # Depth head: nclass ∈ {1, 2}
+            #   nclass=1 → single-channel depth (original, sigmoid output)
+            #   nclass=2 → channel 0 = μ depth, channel 1 = s = log(σ) uncertainty
+            #              sigmoid applied only to channel 0 in the model forward
             self.scratch.output_conv1 = nn.Conv2d(
                 head_features_1, head_features_1 // 2, kernel_size=3, stride=1, padding=1)
 
@@ -169,9 +174,10 @@ class DPTHead(nn.Module):
                 nn.Conv2d(head_features_1 // 2, head_features_2,
                           kernel_size=3, stride=1, padding=1),
                 nn.ReLU(True),
-                nn.Conv2d(head_features_2, 1, kernel_size=1,
+                nn.Conv2d(head_features_2, nclass, kernel_size=1,
                           stride=1, padding=0),
-                act_func,
+                # Sigmoid only for single-channel depth; for nclass=2 it's applied per-channel in the model forward
+                act_func if nclass == 1 else nn.Identity(),
             )
 
     def forward(self, out_features, patch_h, patch_w, prompt_depth=None, return_intermediate=False):

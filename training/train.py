@@ -17,6 +17,7 @@ except ImportError:
 
 from dataset.dataset import MyARKitScenesDataset, collate_fn
 from promptda.promptda_baseline import PromptDA
+from promptda.promptda_uncertainty import PromptDAUncertainty
 from promptda.utils.logger import Log
 from training.optimizer import build_optimizer, build_scheduler
 from training.trainer import Trainer
@@ -52,8 +53,13 @@ def parse_args():
 
     p.add_argument("--seed", type=int, default=42)
 
+    p.add_argument("--uncertainty", type=str2bool, default=False,
+                   help="Use 2-channel uncertainty head + Laplace NLL loss")
+
     p.add_argument("--use_wandb", type=str2bool, default=True)
     p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
+    p.add_argument("--promptda_ckpt", type=str, default="depth-anything/prompt-depth-anything-vitl",
+               help="Path to pretrained PromptDA checkpoint for Strategy A init")
 
     return p.parse_args()
 
@@ -69,8 +75,8 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def build_loader(data_root, split, batch_size, num_workers, shuffle):
-    ds = MyARKitScenesDataset(root=data_root, split=split)
+def build_loader(data_root, split, batch_size, num_workers, shuffle, max_samples=None, seed=42):
+    ds = MyARKitScenesDataset(root=data_root, split=split, max_samples=max_samples, seed=seed)
     loader = DataLoader(
         ds,
         batch_size=batch_size,
@@ -94,16 +100,28 @@ def main():
     Log.info(f"Run         : {args.run_name}")
     Log.info(f"Encoder     : {args.encoder}")
     Log.info(f"DPT variant : {args.dpt_variant}")
+    Log.info(f"Uncertainty : {args.uncertainty}")
     Log.info(f"Eval only   : {args.eval_only}")
 
-    val_loader = build_loader(args.data_root, "val", args.batch_size, args.num_workers, shuffle=False)
+    val_loader = build_loader(args.data_root, "val", args.batch_size, args.num_workers, shuffle=False, max_samples=None, seed=args.seed)
 
-    model = PromptDA(
-        encoder=args.encoder,
-        dpt_variant=args.dpt_variant,
-    ).to(device)
+    
+
+    if args.uncertainty:
+        model = PromptDAUncertainty(
+            encoder=args.encoder,
+            dpt_variant=args.dpt_variant,
+            promptda_ckpt_path=args.promptda_ckpt,
+        ).to(device)
+    else:
+        model = PromptDA(
+            encoder=args.encoder,
+            dpt_variant=args.dpt_variant,
+        ).to(device)
 
     ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}"
+    if args.uncertainty:
+        ckpt_dir += "_uncertainty"
     os.makedirs(ckpt_dir, exist_ok=True)
 
     wandb_run = None
@@ -117,7 +135,7 @@ def main():
             dir=ckpt_dir,
             mode=args.wandb_mode,
             config=vars(args),
-            tags=["baseline", args.encoder, args.dpt_variant, "dpt_head_only"],
+            tags=["baseline", args.encoder, args.dpt_variant, "dpt_head_only"] + (["uncertainty"] if args.uncertainty else []),
         )
 
     trainer = Trainer(
@@ -127,6 +145,7 @@ def main():
         device=device,
         ckpt_dir=ckpt_dir,
         wandb_run=wandb_run,
+        uncertainty=args.uncertainty,
     )
 
     if args.eval_only:
@@ -152,7 +171,7 @@ def main():
             wandb_run.finish()
         return
 
-    train_loader = build_loader(args.data_root, "train", args.batch_size, args.num_workers, shuffle=True)
+    train_loader = build_loader(args.data_root, "train", args.batch_size, args.num_workers, shuffle=True, max_samples=args.max_samples, seed=args.seed)
 
     optimizer = build_optimizer(model, lr_dpt=args.lr_dpt)
     scheduler = build_scheduler(

@@ -36,6 +36,8 @@ class ARKitScenesDataset(Dataset):
             split: str = 'train',
             transform: Optional[Callable] = None,
             upsample_factor: Optional[int] = None,
+            max_samples: Optional[int] = None,
+            seed: int = 42,
     ) -> None:
 
         super(ARKitScenesDataset, self).__init__()
@@ -74,6 +76,12 @@ class ARKitScenesDataset(Dataset):
             color_files = glob(os.path.join(video_folder, WIDE, '*.png'))
             self.samples.extend([[str(video_id), str(os.path.basename(file)), sky_direction]
                                  for file in color_files])
+            
+        if max_samples is not None and max_samples < len(self.samples):
+            rng = np.random.default_rng(seed)
+            indices = rng.choice(len(self.samples), size=max_samples, replace=False)
+            indices.sort()
+            self.samples = [self.samples[i] for i in indices]
 
     @staticmethod
     def rotate_image(img, direction):
