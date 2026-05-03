@@ -108,16 +108,19 @@ def main():
     
 
     if args.uncertainty:
-        model = PromptDAUncertainty(
-            encoder=args.encoder,
-            dpt_variant=args.dpt_variant,
-            promptda_ckpt_path=args.promptda_ckpt,
-        ).to(device)
-    else:
-        model = PromptDA(
-            encoder=args.encoder,
-            dpt_variant=args.dpt_variant,
-        ).to(device)
+        if args.promptda_ckpt:
+            # Strategy A: local hoặc HF hub
+            model = PromptDAUncertainty.from_pretrained(
+                pretrained_model_name_or_path=args.promptda_ckpt,
+                encoder=args.encoder,
+                dpt_variant=args.dpt_variant,
+            )
+        else:
+            # Strategy C (fallback, không khuyến nghị)
+            model = PromptDAUncertainty(
+                encoder=args.encoder,
+                dpt_variant=args.dpt_variant,
+            )
 
     ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}"
     if args.uncertainty:
