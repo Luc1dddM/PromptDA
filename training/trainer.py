@@ -28,7 +28,7 @@ class Trainer:
         wandb_run: Any = None,
         uncertainty: bool = False,
     ):
-        self.model = model
+        self.model = model.to(device)
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = device

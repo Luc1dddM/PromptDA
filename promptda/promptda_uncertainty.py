@@ -292,11 +292,23 @@ class PromptDAUncertainty(nn.Module):
 
         # ── Warm-start output_conv2 channel 0 from pretrained 1-ch weight ─
         # This gives the depth (μ) channel a much better init than random.
+        # Only copy when all dims except dim 0 (nclass) match — otherwise
+        # this is an encoder mismatch (e.g. vits model + vitl checkpoint)
+        # and the weights are incompatible.
         for k, ckpt_tensor in mismatched_keys.items():
             if 'output_conv2' not in k:
                 continue
             param = model_sd[k]
             if ckpt_tensor.dim() >= 1 and param.dim() >= 1:
+                # Check trailing dims match (all except dim 0)
+                if ckpt_tensor.shape[1:] != param.shape[1:]:
+                    Log.warn(
+                        f"[Strategy A] Cannot warm-start '{k}': trailing dims "
+                        f"differ (ckpt {list(ckpt_tensor.shape)} vs model "
+                        f"{list(param.shape)}). Likely encoder mismatch — "
+                        f"this layer stays randomly initialised."
+                    )
+                    continue
                 # Weight: ckpt [1, C_in, ...] → model [2, C_in, ...]
                 # Bias:   ckpt [1]            → model [2]
                 # Copy pretrained into channel 0; channel 1 stays random init.

@@ -58,8 +58,8 @@ def parse_args():
 
     p.add_argument("--use_wandb", type=str2bool, default=True)
     p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
-    p.add_argument("--promptda_ckpt", type=str, default="depth-anything/prompt-depth-anything-vitl",
-               help="Path to pretrained PromptDA checkpoint for Strategy A init")
+    p.add_argument("--promptda_ckpt", type=str, default=None,
+               help="Path or HF repo for pretrained PromptDA checkpoint (default: auto from --encoder)")
 
     return p.parse_args()
 
@@ -108,19 +108,12 @@ def main():
     
 
     if args.uncertainty:
-        if args.promptda_ckpt:
-            # Strategy A: local hoặc HF hub
-            model = PromptDAUncertainty.from_pretrained(
-                pretrained_model_name_or_path=args.promptda_ckpt,
-                encoder=args.encoder,
-                dpt_variant=args.dpt_variant,
-            )
-        else:
-            # Strategy C (fallback, không khuyến nghị)
-            model = PromptDAUncertainty(
-                encoder=args.encoder,
-                dpt_variant=args.dpt_variant,
-            )
+        # Strategy A: from_pretrained handles None → auto HF repo for encoder
+        model = PromptDAUncertainty.from_pretrained(
+            pretrained_model_name_or_path=args.promptda_ckpt,
+            encoder=args.encoder,
+            dpt_variant=args.dpt_variant,
+        )
 
     ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}"
     if args.uncertainty:
