@@ -4,8 +4,8 @@ import numpy as np
 import torch
 
 import dataset_keys
-import image_utils
-from data_utils import image_hwc_to_chw, image_chw_to_hwc, batch_to_cuda
+from data.ARKitScenes.depth_upsampling import image_utils
+from data.ARKitScenes.depth_upsampling.data_utils import image_hwc_to_chw, image_chw_to_hwc
 
 MAX_TENSORBOARD_FRAMES = 10
 VMIN = 0

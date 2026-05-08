@@ -120,14 +120,14 @@ class MyARKitScenesDataset(ARKitScenesDataset):
             apple_file, self.low_res, True, direction, target_hw=TARGET_HW
         )
 
-        # Boxes: derived from fixed RGB size, no change needed
-        boxes_px   = self.load_bounding_box(box_file)
-        boxes_feat = self.scale_boxes_to_feature_space(boxes_px, img_h, img_w)
-        sample[dataset_keys.BOUNDING_BOX]       = boxes_feat
-        sample[dataset_keys.BOUNDING_BOX_IMAGE] = boxes_px
+        # # Boxes: derived from fixed RGB size, no change needed
+        # boxes_px   = self.load_bounding_box(box_file)
+        # boxes_feat = self.scale_boxes_to_feature_space(boxes_px, img_h, img_w)
+        # sample[dataset_keys.BOUNDING_BOX]       = boxes_feat
+        # sample[dataset_keys.BOUNDING_BOX_IMAGE] = boxes_px
 
         if self.transform is not None:
-            sample[dataset_keys.COLOR_IMG] = self.transform(sample[dataset_keys.COLOR_IMG])
+            sample = self.transform(sample)
 
         return sample
     
@@ -138,6 +138,8 @@ def collate_fn(batch):
         dataset_keys.HIGH_RES_DEPTH_IMG,
         dataset_keys.LOW_RES_DEPTH_IMG,
     ]
+    if dataset_keys.VALID_MASK_IMG in batch[0]:
+        keys_to_stack.append(dataset_keys.VALID_MASK_IMG)
     result = {}
 
     for k in keys_to_stack:
@@ -146,12 +148,12 @@ def collate_fn(batch):
         ).float()
 
     # Boxes: list of Tensor (N_i, 4) — N_i khác nhau
-    result[dataset_keys.BOUNDING_BOX] = [
-        torch.from_numpy(s[dataset_keys.BOUNDING_BOX]).float()
-        for s in batch
-    ]
+    # result[dataset_keys.BOUNDING_BOX] = [
+    #     torch.from_numpy(s[dataset_keys.BOUNDING_BOX]).float()
+    #     for s in batch
+    # ]
 
-    result[dataset_keys.BOUNDING_BOX_IMAGE] = [torch.from_numpy(s[dataset_keys.BOUNDING_BOX_IMAGE]).float() for s in batch]
+    # result[dataset_keys.BOUNDING_BOX_IMAGE] = [torch.from_numpy(s[dataset_keys.BOUNDING_BOX_IMAGE]).float() for s in batch]
 
     result[dataset_keys.IDENTIFIER] = [s[dataset_keys.IDENTIFIER] for s in batch]
     return result

@@ -7,6 +7,7 @@ from data.ARKitScenes.depth_upsampling import dataset_keys as arkit_dataset_keys
 sys.modules.setdefault("dataset_keys", arkit_dataset_keys)
 
 from data.ARKitScenes.depth_upsampling.losses.l1_loss import l1_loss
+from data.ARKitScenes.depth_upsampling.losses.gradient_loss import gradient_loss
 
 
 class CombinedLoss(nn.Module):
@@ -22,7 +23,7 @@ class CombinedLoss(nn.Module):
             arkit_dataset_keys.PREDICTION_DEPTH_IMG: pred,
         }
 
-        loss_mae = l1_loss(outputs, inputs)
+        loss_mae = l1_loss(outputs, inputs) + 2 * gradient_loss(outputs, inputs)
         loss_mae = torch.nan_to_num(loss_mae, nan=0.0, posinf=1e4, neginf=0.0)
 
         return loss_mae, {

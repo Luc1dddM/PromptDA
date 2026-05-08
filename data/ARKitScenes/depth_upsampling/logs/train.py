@@ -1,6 +1,6 @@
 import dataset_keys
-import image_utils
-from data_utils import image_hwc_to_chw, image_chw_to_hwc
+from data.ARKitScenes.depth_upsampling import image_utils
+from data.ARKitScenes.depth_upsampling.data_utils import image_hwc_to_chw, image_chw_to_hwc
 
 MAX_TENSORBOARD_IMAGES = 6
 
