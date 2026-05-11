@@ -10,7 +10,7 @@ ultralytics==8.3.0
 # pip install https://github.com/isl-org/Open3D/releases/download/v0.18.0/open3d-0.18.0-cp312-cp312-manylinux_2_27_x86_64.whl
 
 # --- Computer Vision & Image Processing ---
-opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
 Pillow>=10.1.0
 imageio>=2.33.1
 imageio-ffmpeg

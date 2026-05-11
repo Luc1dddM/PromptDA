@@ -27,6 +27,8 @@ class Trainer:
         ckpt_dir: str,
         wandb_run: Any = None,
         uncertainty: bool = False,
+        use_smooth: bool = False,
+        smooth_weight: float = 0.1,
     ):
         self.model = model.to(device)
         self.optimizer = optimizer
@@ -34,7 +36,12 @@ class Trainer:
         self.device = device
         self.ckpt_dir = Path(ckpt_dir)
         self.uncertainty = uncertainty
-        self.loss_fn = RobustLaplaceNLLLoss() if uncertainty else CombinedLoss()
+        self.use_smooth = use_smooth
+        self.loss_fn = (
+            RobustLaplaceNLLLoss()
+            if uncertainty
+            else CombinedLoss(use_smooth=use_smooth, smooth_weight=smooth_weight)
+        )
         self.best_l1 = float("inf")
         self.global_step = 0
         self.start_epoch = 1
@@ -82,7 +89,7 @@ class Trainer:
                 trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
                 Log.info(f"[DEBUG] Trainable params: {trainable}")
 
-            loss, loss_info = self.loss_fn(pred, depth_gt)
+            loss, loss_info = self.loss_fn(pred, depth_gt, image if self.use_smooth else None)
 
             if self.optimizer is None:
                 raise RuntimeError("Optimizer is None in training mode.")
@@ -130,7 +137,7 @@ class Trainer:
                         mode="bilinear", align_corners=False,
                     )
 
-            loss, _ = self.loss_fn(pred, depth_gt)
+            loss, _ = self.loss_fn(pred, depth_gt, image if self.use_smooth else None)
 
             total_loss += loss.item()
             # compute_depth_metrics expects a tensor — pass mu for uncertainty, pred for legacy

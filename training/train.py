@@ -86,6 +86,11 @@ def parse_args():
     p.add_argument("--tbp", type=int, default=None)
     p.add_argument("--log_dir", type=str, default="log")
 
+    p.add_argument("--use_smooth", type=str2bool, default=False,
+                   help="Add edge-aware smoothness loss: |∂x D|·exp(-|∂x I|) + |∂y D|·exp(-|∂y I|)")
+    p.add_argument("--smooth_weight", type=float, default=0.1,
+                   help="Weight λ for the smoothness term (default: 0.1)")
+
     return p.parse_args()
 
 
@@ -200,6 +205,7 @@ def main():
     Log.info(f"Encoder     : {args.encoder}")
     Log.info(f"DPT variant : {args.dpt_variant}")
     Log.info(f"Uncertainty : {args.uncertainty}")
+    Log.info(f"Use smooth  : {args.use_smooth} (λ={args.smooth_weight})")
     Log.info(f"Eval only   : {args.eval_only}")
 
     val_loader = build_val_loader(args)
@@ -243,6 +249,8 @@ def main():
         ckpt_dir=ckpt_dir,
         wandb_run=wandb_run,
         uncertainty=args.uncertainty,
+        use_smooth=args.use_smooth,
+        smooth_weight=args.smooth_weight,
     )
 
     if args.eval_only:
@@ -328,7 +336,7 @@ def main():
                 )
                 pred_depth = pred
 
-        loss, _ = trainer.loss_fn(pred, depth_gt)
+        loss, _ = trainer.loss_fn(pred, depth_gt, image if args.use_smooth else None)
 
         if torch.isnan(loss).any():
             raise RuntimeError("NaN in loss occurred. Aborting training.")
