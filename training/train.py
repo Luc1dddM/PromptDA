@@ -317,24 +317,10 @@ def main():
         pred = model(image, prompt)
 
         pred_depth = pred["mu"] if isinstance(pred, dict) else pred
-        if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-            if isinstance(pred, dict):
-                pred["mu"] = torch.nn.functional.interpolate(
-                    pred_depth, size=depth_gt.shape[-2:],
-                    mode="bilinear", align_corners=False,
-                )
-                if "s" in pred:
-                    pred["s"] = torch.nn.functional.interpolate(
-                        pred["s"], size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                pred_depth = pred["mu"]
-            else:
-                pred = torch.nn.functional.interpolate(
-                    pred, size=depth_gt.shape[-2:],
-                    mode="bilinear", align_corners=False,
-                )
-                pred_depth = pred
+        assert pred_depth.shape[-2:] == depth_gt.shape[-2:], (
+            f"[main loop] pred {pred_depth.shape[-2:]} ≠ GT {depth_gt.shape[-2:]}. "
+            "Check dataset image/depth sizes."
+        )
 
         loss, _ = trainer.loss_fn(pred, depth_gt, image if args.use_smooth else None)
 

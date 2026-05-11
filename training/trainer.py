@@ -66,24 +66,13 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            # Extract depth for resize alignment (handle both tensor and dict output)
+            # After the dataset fix, pred and depth_gt must share the same spatial size.
+            # If they don't, there is a data pipeline bug - fail fast instead of silently resizing.
             pred_depth = pred["mu"] if isinstance(pred, dict) else pred
-            if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-                if isinstance(pred, dict):
-                    pred["mu"] = torch.nn.functional.interpolate(
-                        pred_depth, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                    if "s" in pred:
-                        pred["s"] = torch.nn.functional.interpolate(
-                            pred["s"], size=depth_gt.shape[-2:],
-                            mode="bilinear", align_corners=False,
-                        )
-                else:
-                    pred = torch.nn.functional.interpolate(
-                        pred, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
+            assert pred_depth.shape[-2:] == depth_gt.shape[-2:], (
+                f"[train] pred {pred_depth.shape[-2:]} ≠ GT {depth_gt.shape[-2:]}. "
+                "Check dataset image/depth sizes."
+            )
 
             if epoch == 1 and batch_idx == 0:
                 trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -118,24 +107,12 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            # Extract depth tensor for resize and metrics
+            # After the dataset fix, pred and depth_gt must share the same spatial size.
             pred_depth = pred["mu"] if isinstance(pred, dict) else pred
-            if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-                if isinstance(pred, dict):
-                    pred["mu"] = torch.nn.functional.interpolate(
-                        pred_depth, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                    if "s" in pred:
-                        pred["s"] = torch.nn.functional.interpolate(
-                            pred["s"], size=depth_gt.shape[-2:],
-                            mode="bilinear", align_corners=False,
-                        )
-                else:
-                    pred = torch.nn.functional.interpolate(
-                        pred, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
+            assert pred_depth.shape[-2:] == depth_gt.shape[-2:], (
+                f"[eval] pred {pred_depth.shape[-2:]} ≠ GT {depth_gt.shape[-2:]}. "
+                "Check dataset image/depth sizes."
+            )
 
             loss, _ = self.loss_fn(pred, depth_gt, image if self.use_smooth else None)
 

@@ -113,11 +113,14 @@ class MyARKitScenesDataset(ARKitScenesDataset):
 
         # Load depths resized to match RGB exactly
         sample[dataset_keys.COLOR_IMG]          = color_img
+        # GT depth: same spatial size as the image → no interpolation needed in trainer
         sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(
-            depth_file, self.high_res, True, direction, target_hw=self.high_res
+            depth_file, self.high_res, True, direction, target_hw=TARGET_HW
         )
+        # Prompt (LiDAR) depth: keep at its native low-res size so the model
+        # receives a sparse prompt, exactly as in the official example usage.
         sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(
-            apple_file, self.low_res, True, direction, target_hw=TARGET_HW
+            apple_file, self.low_res, True, direction, target_hw=self.low_res
         )
 
         # # Boxes: derived from fixed RGB size, no change needed
