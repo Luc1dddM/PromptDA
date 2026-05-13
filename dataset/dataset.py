@@ -34,10 +34,8 @@ class MyARKitScenesDataset(ARKitScenesDataset):
             img = expand_channel_dim(img)
         else:
             img = img / 255.0
-            h, w = img.shape[:2]
-            if (h, w) != (TARGET_H, TARGET_W):
-                img = cv2.resize(img, (TARGET_W, TARGET_H),
-                                interpolation=cv2.INTER_AREA)
+            img = cv2.resize(img, (TARGET_W, TARGET_H),
+                             interpolation=cv2.INTER_AREA)
 
             img = image_hwc_to_chw(np.asarray(img, np.float32))
         return img

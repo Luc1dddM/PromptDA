@@ -11,27 +11,34 @@ from data.ARKitScenes.depth_upsampling.losses.l1_loss import l1_loss
 from data.ARKitScenes.depth_upsampling.losses.gradient_loss import gradient_loss
 
 
-def edge_aware_smooth_loss(pred_depth: torch.Tensor, image: torch.Tensor) -> torch.Tensor:
+def edge_aware_smooth_loss(pred_depth: torch.Tensor, image: torch.Tensor, alpha: float = 10.0) -> torch.Tensor:
     """Edge-aware smoothness loss.
 
-    L_smooth = |∂x D| · exp(-|∂x I|) + |∂y D| · exp(-|∂y I|)
+    L_smooth = |∂x D| · exp(-alpha · |∂x I|) + |∂y D| · exp(-alpha · |∂y I|)
 
     Args:
         pred_depth: (B, 1, H, W) predicted depth map.
-        image:      (B, C, H, W) RGB image used as edge guide.
+        image:      (B, C, H, W) RGB image used as edge guide (nên ở dải giá trị [0, 1]).
+        alpha:      Hệ số khuếch đại gradient ảnh (giúp nhạy bén hơn với cạnh nhỏ).
 
     Returns:
         Scalar mean loss.
     """
-    # Depth gradients
-    d_dx = torch.abs(pred_depth[:, :, :, :-1] - pred_depth[:, :, :, 1:])   # (B,1,H,W-1)
-    d_dy = torch.abs(pred_depth[:, :, :-1, :] - pred_depth[:, :, 1:, :])   # (B,1,H-1,W)
+    # Chuẩn hóa pred_depth theo giá trị trung bình để loss scale-invariant
+    # Giúp hàm loss không bị áp đảo bởi các cảnh có độ sâu tuyệt đối quá lớn
+    mean_depth = pred_depth.mean(dim=[2, 3], keepdim=True)
+    norm_depth = pred_depth / (mean_depth + 1e-8)
+
+    # Depth gradients (tính trên depth đã chuẩn hóa)
+    d_dx = torch.abs(norm_depth[:, :, :, :-1] - norm_depth[:, :, :, 1:])   # (B,1,H,W-1)
+    d_dy = torch.abs(norm_depth[:, :, :-1, :] - norm_depth[:, :, 1:, :])   # (B,1,H-1,W)
 
     # Image gradients (mean over channels → single-channel edge map)
     i_dx = torch.abs(image[:, :, :, :-1] - image[:, :, :, 1:]).mean(dim=1, keepdim=True)  # (B,1,H,W-1)
     i_dy = torch.abs(image[:, :, :-1, :] - image[:, :, 1:, :]).mean(dim=1, keepdim=True)  # (B,1,H-1,W)
 
-    loss = (d_dx * torch.exp(-i_dx)).mean() + (d_dy * torch.exp(-i_dy)).mean()
+    # Tính loss với trọng số là e^(-alpha * grad_img)
+    loss = (d_dx * torch.exp(-alpha * i_dx)).mean() + (d_dy * torch.exp(-alpha * i_dy)).mean()
     return loss
 
 
@@ -39,22 +46,25 @@ class CombinedLoss(nn.Module):
     """Combined depth loss.
 
     Args:
-        use_smooth: If True, adds edge-aware smoothness term to the base
-                    (L1 + 2·gradient) loss.
+        use_smooth:    If True, adds edge-aware smoothness term to the base
+                       (L1 + 2·gradient) loss.
         smooth_weight: Weight λ for the smoothness term (default 0.1).
+        smooth_alpha:  Alpha parameter for edge sensitivity in smoothness loss (default 10.0).
     """
 
-    def __init__(self, use_smooth: bool = False, smooth_weight: float = 0.1):
+    def __init__(self, use_smooth: bool = False, smooth_weight: float = 0.1, smooth_alpha: float = 10.0):
         super().__init__()
         self.use_smooth = use_smooth
         self.smooth_weight = smooth_weight
+        self.smooth_alpha = smooth_alpha
 
     def forward(self, pred, target, image: torch.Tensor | None = None):
         """
         Args:
             pred:   Predicted depth tensor (B, 1, H, W) or dict with key 'mu'.
             target: Ground-truth depth tensor (B, 1, H, W).
-            image:  RGB image tensor (B, 3, H, W).  Required when use_smooth=True.
+            image:  RGB image tensor (B, 3, H, W). Required when use_smooth=True. 
+                    Ensure image tensor values are in [0, 1].
         """
         pred_depth = pred["mu"] if isinstance(pred, dict) else pred
 
@@ -78,10 +88,18 @@ class CombinedLoss(nn.Module):
         if self.use_smooth:
             if image is None:
                 raise ValueError("CombinedLoss: `image` must be provided when use_smooth=True.")
+            
+            # Đảm bảo ảnh nằm trong dải [0, 1] nếu nó đang ở dạng [0, 255]
+            if image.max() > 1.0:
+                image = image / 255.0
+
             # Resize image to match pred_depth spatial size if needed
             if image.shape[-2:] != pred_depth.shape[-2:]:
                 image = F.interpolate(image, size=pred_depth.shape[-2:], mode="bilinear", align_corners=False)
-            loss_smooth = edge_aware_smooth_loss(pred_depth, image)
+            
+            # Tính smooth loss với tham số alpha
+            loss_smooth = edge_aware_smooth_loss(pred_depth, image, alpha=self.smooth_alpha)
+            
             loss_total = loss_base + self.smooth_weight * loss_smooth
             loss_info["loss_smooth"] = loss_smooth.item()
         else:

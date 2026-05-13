@@ -113,7 +113,7 @@ def build_transforms(split: str | None = None):
             transfroms.AsContiguousArray(),
         ])
     return Compose([
-        transfroms.ModCrop(modulo=32),
+        transfroms.ModCrop(modulo=14),
         transfroms.ValidDepthMask(gt_low_limit=0.01),
     ])
 
