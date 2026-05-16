@@ -32,13 +32,17 @@ from data.ARKitScenes.depth_upsampling.logs.train import train_log
 from data.ARKitScenes.depth_upsampling.sampler import MultiEpochSampler
 from dataset.dataset import MyARKitScenesDataset, collate_fn
 from dataset import dataset_keys
-from promptda.promptda_baseline import PromptDA
+from promptda.promptda_baseline import PromptDA as ViTPromptDA
+from promptda.promptda_pyramic import PromptDA as PyramidPromptDA
 from promptda.promptda_uncertainty import PromptDAUncertainty
 from promptda.utils.logger import Log
 from training.optimizer import build_optimizer
 from training.trainer import Trainer
 
 TENSORBOARD_DIR = "tensorboard"
+PYRAMID_ENCODERS = tuple(PyramidPromptDA.BACKBONES)
+VIT_ENCODERS = ("vits", "vitb", "vitl")
+ALL_ENCODERS = VIT_ENCODERS + PYRAMID_ENCODERS
 
 
 def str2bool(value: str) -> bool:
@@ -52,7 +56,12 @@ def parse_args():
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--num_workers", type=int, default=4)
 
-    p.add_argument("--encoder", type=str, default="vits", choices=["vits", "vitb", "vitl"])
+    p.add_argument(
+        "--encoder",
+        type=str,
+        default="vits",
+        choices=ALL_ENCODERS,
+    )
     p.add_argument(
         "--dpt_variant",
         type=str,
@@ -92,6 +101,37 @@ def parse_args():
                    help="Weight λ for the smoothness term (default: 0.1)")
 
     return p.parse_args()
+
+
+def get_backbone_family(encoder: str) -> str:
+    return "pyramid" if encoder in PYRAMID_ENCODERS else "vit"
+
+
+def build_model(args):
+    backbone_family = get_backbone_family(args.encoder)
+
+    if args.uncertainty and backbone_family == "pyramid":
+        raise ValueError("Uncertainty training is implemented only for DINOv2 ViT encoders.")
+
+    if args.uncertainty:
+        return PromptDAUncertainty.from_pretrained(
+            pretrained_model_name_or_path=args.promptda_ckpt,
+            encoder=args.encoder,
+            dpt_variant=args.dpt_variant,
+        )
+
+    if backbone_family == "pyramid":
+        return PyramidPromptDA(
+            encoder=args.encoder,
+            ckpt_path=args.promptda_ckpt,
+            dpt_variant=args.dpt_variant,
+            pretrained_backbone=True,
+        )
+
+    return ViTPromptDA(
+        encoder=args.encoder,
+        dpt_variant=args.dpt_variant,
+    )
 
 
 def set_seed(seed: int):
@@ -203,26 +243,17 @@ def main():
     Log.info(f"Seed        : {args.seed}")
     Log.info(f"Run         : {args.run_name}")
     Log.info(f"Encoder     : {args.encoder}")
+    backbone_family = get_backbone_family(args.encoder)
+    Log.info(f"Backbone    : {backbone_family}")
     Log.info(f"DPT variant : {args.dpt_variant}")
     Log.info(f"Uncertainty : {args.uncertainty}")
     Log.info(f"Use smooth  : {args.use_smooth} (λ={args.smooth_weight})")
     Log.info(f"Eval only   : {args.eval_only}")
 
     val_loader = build_val_loader(args)
+    model = build_model(args)
 
-    if args.uncertainty:
-        model = PromptDAUncertainty.from_pretrained(
-            pretrained_model_name_or_path=args.promptda_ckpt,
-            encoder=args.encoder,
-            dpt_variant=args.dpt_variant,
-        )
-    else:
-        model = PromptDA(
-            encoder=args.encoder,
-            dpt_variant=args.dpt_variant,
-        )
-
-    ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}"
+    ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{backbone_family}_{args.encoder}_{args.dpt_variant}_{args.seed}"
     if args.uncertainty:
         ckpt_dir += "_uncertainty"
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -238,7 +269,7 @@ def main():
             dir=ckpt_dir,
             mode=args.wandb_mode,
             config=vars(args),
-            tags=["baseline", args.encoder, args.dpt_variant, "dpt_head_only"] + (["uncertainty"] if args.uncertainty else []),
+            tags=[backbone_family, args.encoder, args.dpt_variant, "dpt_head_only"] + (["uncertainty"] if args.uncertainty else []),
         )
 
     trainer = Trainer(
@@ -329,6 +360,7 @@ def main():
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         duration += time.time() - before_op_time

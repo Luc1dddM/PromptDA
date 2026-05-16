@@ -72,48 +72,62 @@ class DPTHead(nn.Module):
         self.nclass = nclass
         self.use_clstoken = use_clstoken
         self.dpt_variant = dpt_variant
+        if isinstance(in_channels, int):
+            in_channels = [in_channels] * len(out_channels)
+            self._expects_tokens = True
+        else:
+            in_channels = list(in_channels)
+            self._expects_tokens = False
+        self.in_channels = in_channels
+        if len(in_channels) != len(out_channels):
+            raise ValueError(
+                f"Expected {len(out_channels)} input feature channels, got {len(in_channels)}."
+            )
 
         if self.dpt_variant not in {'legacy', 'skip_concat_1x1', 'hybrid_ca_shallow_concat'}:
             raise ValueError(f"Unsupported dpt_variant: {self.dpt_variant}")
 
         self.projects = nn.ModuleList([
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=out_channel,
-                kernel_size=1,
-                stride=1,
-                padding=0,
-            ) for out_channel in out_channels
+            nn.Conv2d(c, out_c, kernel_size=1)
+            for c, out_c in zip(in_channels, out_channels)
         ])
 
-        self.resize_layers = nn.ModuleList([
-            nn.ConvTranspose2d(
-                in_channels=out_channels[0],
-                out_channels=out_channels[0],
-                kernel_size=4,
-                stride=4,
-                padding=0),
-            nn.ConvTranspose2d(
-                in_channels=out_channels[1],
-                out_channels=out_channels[1],
-                kernel_size=2,
-                stride=2,
-                padding=0),
-            nn.Identity(),
-            nn.Conv2d(
-                in_channels=out_channels[3],
-                out_channels=out_channels[3],
-                kernel_size=3,
-                stride=2,
-                padding=1)
-        ])
+        if self._expects_tokens:
+            self.resize_layers = nn.ModuleList([
+                nn.ConvTranspose2d(
+                    in_channels=out_channels[0],
+                    out_channels=out_channels[0],
+                    kernel_size=4,
+                    stride=4,
+                    padding=0),
+                nn.ConvTranspose2d(
+                    in_channels=out_channels[1],
+                    out_channels=out_channels[1],
+                    kernel_size=2,
+                    stride=2,
+                    padding=0),
+                nn.Identity(),
+                nn.Conv2d(
+                    in_channels=out_channels[3],
+                    out_channels=out_channels[3],
+                    kernel_size=3,
+                    stride=2,
+                    padding=1)
+            ])
+        else:
+            self.resize_layers = nn.ModuleList([
+                nn.Identity(),
+                nn.Identity(),
+                nn.Identity(),
+                nn.Identity(),
+            ])
 
         if use_clstoken:
             self.readout_projects = nn.ModuleList()
-            for _ in range(len(self.projects)):
+            for c in in_channels:
                 self.readout_projects.append(
                     nn.Sequential(
-                        nn.Linear(2 * in_channels, in_channels),
+                        nn.Linear(2 * c, c),
                         nn.GELU()))
 
         self.scratch = _make_scratch(
@@ -180,22 +194,44 @@ class DPTHead(nn.Module):
                 act_func if nclass == 1 else nn.Identity(),
             )
 
-    def forward(self, out_features, patch_h, patch_w, prompt_depth=None, return_intermediate=False):
+    def forward(
+        self,
+        out_features,
+        patch_h,
+        patch_w,
+        prompt_depth=None,
+        return_intermediate=False,
+        output_size=None,
+    ):
         out = []
-        for i, x in enumerate(out_features):
-            if self.use_clstoken:
-                x, cls_token = x[0], x[1]
-                readout = cls_token.unsqueeze(1).expand_as(x)
-                x = self.readout_projects[i](torch.cat((x, readout), -1))
+        for i, feat in enumerate(out_features):
+            if isinstance(feat, (tuple, list)):
+                x = feat[0]
+                if self.use_clstoken:
+                    cls_token = feat[1]
+                    readout = cls_token.unsqueeze(1).expand_as(x)
+                    x = self.readout_projects[i](torch.cat((x, readout), -1))
+                x = x.permute(0, 2, 1).reshape(
+                    (x.shape[0], x.shape[-1], patch_h, patch_w))
+            elif feat.ndim == 3:
+                x = feat.permute(0, 2, 1).reshape(
+                    (feat.shape[0], feat.shape[-1], patch_h, patch_w))
+            elif feat.ndim == 4:
+                expected_c = self.in_channels[i]
+                if feat.shape[1] == expected_c:
+                    x = feat
+                elif feat.shape[-1] == expected_c:
+                    x = feat.permute(0, 3, 1, 2).contiguous()
+                else:
+                    raise ValueError(
+                        f"Feature {i} has shape {tuple(feat.shape)}, but expected "
+                        f"{expected_c} channels in NCHW or NHWC layout."
+                    )
             else:
-                x = x[0]
-
-            x = x.permute(0, 2, 1).reshape(
-                (x.shape[0], x.shape[-1], patch_h, patch_w))
+                raise ValueError(f"Unsupported feature {i} shape: {tuple(feat.shape)}")
 
             x = self.projects[i](x)
             x = self.resize_layers[i](x)
-
             out.append(x)
 
         layer_1, layer_2, layer_3, layer_4 = out
@@ -236,10 +272,13 @@ class DPTHead(nn.Module):
                 path_2, layer_1_rn, prompt_depth=prompt_depth)
 
         out = self.scratch.output_conv1(path_1)
-        out_feat = F.interpolate(
-            out, (int(patch_h * 14), int(patch_w * 14)),
+        if output_size is None:
+            output_size = (int(patch_h * 14), int(patch_w * 14))
+        out = F.interpolate(
+            out, output_size,
             mode="bilinear", align_corners=True)
-        out = self.scratch.output_conv2(out_feat)
+        out = self.scratch.output_conv2(out)
+
         if return_intermediate:
             return out, layer_4_rn
         return out

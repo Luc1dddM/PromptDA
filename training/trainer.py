@@ -153,8 +153,8 @@ class Trainer:
         if "history" in state:
             self.history = state["history"]
 
-        self.global_step = int(state.get("global_step", 0))
-        last_epoch = int(state.get("epoch", 0))
+        self.global_step = int(state.get("global_step", state.get("step", 0)))
+        last_epoch = int(state.get("epoch", state.get("step", 0)))
         self.start_epoch = last_epoch + 1
 
         if "best_l1" in state:
