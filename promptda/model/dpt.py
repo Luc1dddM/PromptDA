@@ -28,6 +28,51 @@ class CrossAttention2D(nn.Module):
         return fused.reshape(b, h, w, c).permute(0, 3, 1, 2).contiguous()
 
 
+class PromptGatedFeature(nn.Module):
+    def __init__(self, channels: int):
+        super().__init__()
+        self.prompt_proj = nn.Sequential(
+            nn.Conv2d(1, channels, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1),
+        )
+        self.gate = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, kernel_size=1, stride=1, padding=0),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor, prompt_depth: torch.Tensor | None) -> torch.Tensor:
+        if prompt_depth is None:
+            return x
+        prompt = F.interpolate(prompt_depth, size=x.shape[-2:], mode="bilinear", align_corners=False)
+        prompt_feat = self.prompt_proj(prompt)
+        gate = self.gate(torch.cat([x, prompt_feat], dim=1))
+        return x + gate * prompt_feat
+
+
+class PyramidContextBlock(nn.Module):
+    def __init__(self, channels: int):
+        super().__init__()
+        self.local = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(True),
+        )
+        self.dilated = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=3, dilation=3),
+            nn.ReLU(True),
+        )
+        self.global_proj = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0),
+            nn.ReLU(True),
+        )
+        self.fuse = nn.Conv2d(channels * 3, channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        global_feat = F.interpolate(self.global_proj(x), size=x.shape[-2:], mode="bilinear", align_corners=False)
+        return x + self.fuse(torch.cat([self.local(x), self.dilated(x), global_feat], dim=1))
+
+
 def _pick_num_heads(channels: int) -> int:
     if channels % 8 == 0:
         return 8
@@ -84,7 +129,7 @@ class DPTHead(nn.Module):
                 f"Expected {len(out_channels)} input feature channels, got {len(in_channels)}."
             )
 
-        if self.dpt_variant not in {'legacy', 'skip_concat_1x1', 'hybrid_ca_shallow_concat'}:
+        if self.dpt_variant not in {'legacy', 'skip_concat_1x1', 'hybrid_ca_shallow_concat', 'pyramid_prompt_fpn'}:
             raise ValueError(f"Unsupported dpt_variant: {self.dpt_variant}")
 
         self.projects = nn.ModuleList([
@@ -161,6 +206,28 @@ class DPTHead(nn.Module):
 
             if features % heads != 0:
                 raise ValueError(f"features ({features}) must be divisible by heads ({heads})")
+
+        elif self.dpt_variant == 'pyramid_prompt_fpn':
+            self.prompt_gate1 = PromptGatedFeature(features)
+            self.prompt_gate2 = PromptGatedFeature(features)
+            self.prompt_gate3 = PromptGatedFeature(features)
+            self.prompt_gate4 = PromptGatedFeature(features)
+            self.context4 = PyramidContextBlock(features)
+            self.skip_fuse3 = nn.Sequential(
+                nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0),
+                nn.ReLU(True),
+                nn.Conv2d(features, features, kernel_size=3, stride=1, padding=1),
+            )
+            self.skip_fuse2 = nn.Sequential(
+                nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0),
+                nn.ReLU(True),
+                nn.Conv2d(features, features, kernel_size=3, stride=1, padding=1),
+            )
+            self.skip_fuse1 = nn.Sequential(
+                nn.Conv2d(features * 2, features, kernel_size=1, stride=1, padding=0),
+                nn.ReLU(True),
+                nn.Conv2d(features, features, kernel_size=3, stride=1, padding=1),
+            )
 
         head_features_1 = features
         head_features_2 = 32
@@ -241,10 +308,25 @@ class DPTHead(nn.Module):
         layer_3_rn = self.scratch.layer3_rn(layer_3)
         layer_4_rn = self.scratch.layer4_rn(layer_4)
 
+        if self.dpt_variant == 'pyramid_prompt_fpn':
+            layer_1_rn = self.prompt_gate1(layer_1_rn, prompt_depth)
+            layer_2_rn = self.prompt_gate2(layer_2_rn, prompt_depth)
+            layer_3_rn = self.prompt_gate3(layer_3_rn, prompt_depth)
+            layer_4_rn = self.context4(self.prompt_gate4(layer_4_rn, prompt_depth))
+
         path_4 = self.scratch.refinenet4(
             layer_4_rn, size=layer_3_rn.shape[2:], prompt_depth=prompt_depth)
 
         if self.dpt_variant == 'skip_concat_1x1':
+            path_3_input = self.skip_fuse3(torch.cat([path_4, layer_3_rn], dim=1))
+            path_3 = self.scratch.refinenet3(
+                path_3_input, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)
+            path_2_input = self.skip_fuse2(torch.cat([path_3, layer_2_rn], dim=1))
+            path_2 = self.scratch.refinenet2(
+                path_2_input, size=layer_1_rn.shape[2:], prompt_depth=prompt_depth)
+            path_1_input = self.skip_fuse1(torch.cat([path_2, layer_1_rn], dim=1))
+            path_1 = self.scratch.refinenet1(path_1_input, prompt_depth=prompt_depth)
+        elif self.dpt_variant == 'pyramid_prompt_fpn':
             path_3_input = self.skip_fuse3(torch.cat([path_4, layer_3_rn], dim=1))
             path_3 = self.scratch.refinenet3(
                 path_3_input, size=layer_2_rn.shape[2:], prompt_depth=prompt_depth)

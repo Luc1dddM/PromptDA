@@ -27,7 +27,7 @@ class PromptDA(nn.Module):
         self,
         encoder: str = "swint",
         ckpt_path: Optional[str] = None,
-        dpt_variant: str = "legacy",
+        dpt_variant: str = "pyramid_prompt_fpn",
         pretrained_backbone: bool = True,
     ):
         super().__init__()
@@ -94,7 +94,7 @@ class PromptDA(nn.Module):
         cls,
         pretrained_model_name_or_path: Optional[str] = None,
         encoder: str = "swint",
-        dpt_variant: str = "legacy",
+        dpt_variant: str = "pyramid_prompt_fpn",
         **hf_kwargs,
     ):
         if hf_kwargs:

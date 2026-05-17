@@ -65,8 +65,8 @@ def parse_args():
     p.add_argument(
         "--dpt_variant",
         type=str,
-        default="legacy",
-        choices=["legacy", "skip_concat_1x1", "hybrid_ca_shallow_concat"],
+        default="auto",
+        choices=["auto", "legacy", "skip_concat_1x1", "hybrid_ca_shallow_concat", "pyramid_prompt_fpn"],
     )
 
     p.add_argument("--run_name", type=str, default="baseline_compare")
@@ -107,8 +107,15 @@ def get_backbone_family(encoder: str) -> str:
     return "pyramid" if encoder in PYRAMID_ENCODERS else "vit"
 
 
+def resolve_dpt_variant(encoder: str, dpt_variant: str) -> str:
+    if dpt_variant != "auto":
+        return dpt_variant
+    return "pyramid_prompt_fpn" if get_backbone_family(encoder) == "pyramid" else "legacy"
+
+
 def build_model(args):
     backbone_family = get_backbone_family(args.encoder)
+    dpt_variant = resolve_dpt_variant(args.encoder, args.dpt_variant)
 
     if args.uncertainty and backbone_family == "pyramid":
         raise ValueError("Uncertainty training is implemented only for DINOv2 ViT encoders.")
@@ -117,20 +124,20 @@ def build_model(args):
         return PromptDAUncertainty.from_pretrained(
             pretrained_model_name_or_path=args.promptda_ckpt,
             encoder=args.encoder,
-            dpt_variant=args.dpt_variant,
+            dpt_variant=dpt_variant,
         )
 
     if backbone_family == "pyramid":
         return PyramidPromptDA(
             encoder=args.encoder,
             ckpt_path=args.promptda_ckpt,
-            dpt_variant=args.dpt_variant,
+            dpt_variant=dpt_variant,
             pretrained_backbone=True,
         )
 
     return ViTPromptDA(
         encoder=args.encoder,
-        dpt_variant=args.dpt_variant,
+        dpt_variant=dpt_variant,
     )
 
 
@@ -244,8 +251,9 @@ def main():
     Log.info(f"Run         : {args.run_name}")
     Log.info(f"Encoder     : {args.encoder}")
     backbone_family = get_backbone_family(args.encoder)
+    dpt_variant = resolve_dpt_variant(args.encoder, args.dpt_variant)
     Log.info(f"Backbone    : {backbone_family}")
-    Log.info(f"DPT variant : {args.dpt_variant}")
+    Log.info(f"DPT variant : {dpt_variant} (requested: {args.dpt_variant})")
     Log.info(f"Uncertainty : {args.uncertainty}")
     Log.info(f"Use smooth  : {args.use_smooth} (λ={args.smooth_weight})")
     Log.info(f"Eval only   : {args.eval_only}")
@@ -253,7 +261,7 @@ def main():
     val_loader = build_val_loader(args)
     model = build_model(args)
 
-    ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{backbone_family}_{args.encoder}_{args.dpt_variant}_{args.seed}"
+    ckpt_dir = f"{args.checkpoint_dir}/{args.run_name}_{backbone_family}_{args.encoder}_{dpt_variant}_{args.seed}"
     if args.uncertainty:
         ckpt_dir += "_uncertainty"
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -265,11 +273,11 @@ def main():
         wandb_run = wandb.init(
             project="ObjectPromptDA",
             entity="ObjectPromptDA",
-            name=f"{args.run_name}_{args.encoder}_{args.dpt_variant}_seed{args.seed}",
+            name=f"{args.run_name}_{args.encoder}_{dpt_variant}_seed{args.seed}",
             dir=ckpt_dir,
             mode=args.wandb_mode,
             config=vars(args),
-            tags=[backbone_family, args.encoder, args.dpt_variant, "dpt_head_only"] + (["uncertainty"] if args.uncertainty else []),
+            tags=[backbone_family, args.encoder, dpt_variant, "dpt_head_only"] + (["uncertainty"] if args.uncertainty else []),
         )
 
     trainer = Trainer(
