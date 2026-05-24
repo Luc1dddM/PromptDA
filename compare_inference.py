@@ -73,7 +73,6 @@ def build_transforms(split: str):
             transfroms.AsContiguousArray(),
         ])
     return Compose([
-        transfroms.ModCrop(modulo=32),
         transfroms.ValidDepthMask(gt_low_limit=0.01),
     ])
 
@@ -103,15 +102,12 @@ def move_batch_to_device(batch: dict, device: torch.device) -> dict:
     }
 
 
-def align_prediction(pred: torch.Tensor, target_hw: tuple[int, int]) -> torch.Tensor:
-    if pred.shape[-2:] == target_hw:
-        return pred
-    return torch.nn.functional.interpolate(
-        pred,
-        size=target_hw,
-        mode="bilinear",
-        align_corners=False,
-    )
+def assert_prediction_size(pred: torch.Tensor, target_hw: tuple[int, int], name: str):
+    if pred.shape[-2:] != target_hw:
+        raise RuntimeError(
+            f"{name} shape {tuple(pred.shape[-2:])} does not match GT shape {target_hw}. "
+            "Dataset GT should be resized to PromptDA output/RGB size."
+        )
 
 
 def save_visual(
@@ -177,13 +173,10 @@ def main():
             prompt = batch[arkit_dataset_keys.LOW_RES_DEPTH_IMG]
             identifiers = batch.get(arkit_dataset_keys.IDENTIFIER, [])
 
-            baseline_depth = align_prediction(baseline(image, prompt), depth_gt.shape[-2:])
+            baseline_depth = baseline(image, prompt)
             sacg_output = sacg_model(image, prompt)
-            sacg_output["coarse_depth"] = align_prediction(sacg_output["coarse_depth"], depth_gt.shape[-2:])
-            sacg_output["refined_depth"] = align_prediction(sacg_output["refined_depth"], depth_gt.shape[-2:])
-            sacg_output["gate_map"] = align_prediction(sacg_output["gate_map"], depth_gt.shape[-2:])
-            sacg_output["c_grad"] = align_prediction(sacg_output["c_grad"], depth_gt.shape[-2:])
-            sacg_output["f_lidar"] = align_prediction(sacg_output["f_lidar"], depth_gt.shape[-2:])
+            assert_prediction_size(baseline_depth, depth_gt.shape[-2:], "baseline_depth")
+            assert_prediction_size(sacg_output["refined_depth"], depth_gt.shape[-2:], "refined_depth")
 
             baseline_metrics.append(compute_depth_metrics(baseline_depth, depth_gt, rgb=image))
             sacg_metrics.append(

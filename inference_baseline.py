@@ -3,9 +3,9 @@ Inference/evaluation for the official PromptDA baseline checkpoint.
 
 This script keeps the evaluation pipeline aligned with our local training code:
   - MyARKitScenesDataset + collate_fn
-  - validation transform: ModCrop(32) + ValidDepthMask(gt_low_limit=0.01)
+  - validation transform: ValidDepthMask(gt_low_limit=0.01)
   - model call: model(color_img, low_res_depth_img)
-  - resize prediction to high_res_depth_img before loss/metrics
+  - GT is loaded at PromptDA output/RGB size, so prediction and GT match directly
   - same loss and metrics as Trainer.eval_epoch
 
 By default it loads the official PromptDA checkpoint for the selected encoder.
@@ -27,6 +27,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -134,7 +135,6 @@ def build_transforms(split: str):
             transfroms.AsContiguousArray(),
         ])
     return Compose([
-        transfroms.ModCrop(modulo=32),
         transfroms.ValidDepthMask(gt_low_limit=0.01),
     ])
 
@@ -187,32 +187,16 @@ def move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[st
     }
 
 
-def align_prediction(pred, target_hw: tuple[int, int]):
-    """Resize model output exactly as Trainer.eval_epoch does."""
+def assert_prediction_size(pred, target_hw: tuple[int, int]):
     if isinstance(pred, dict):
         pred_depth = pred["mu"]
-        if pred_depth.shape[-2:] != target_hw:
-            pred["mu"] = torch.nn.functional.interpolate(
-                pred_depth,
-                size=target_hw,
-                mode="bilinear",
-                align_corners=False,
-            )
-            if "s" in pred:
-                pred["s"] = torch.nn.functional.interpolate(
-                    pred["s"],
-                    size=target_hw,
-                    mode="bilinear",
-                    align_corners=False,
-                )
-        return pred
+    else:
+        pred_depth = pred
 
-    if pred.shape[-2:] != target_hw:
-        pred = torch.nn.functional.interpolate(
-            pred,
-            size=target_hw,
-            mode="bilinear",
-            align_corners=False,
+    if pred_depth.shape[-2:] != target_hw:
+        raise RuntimeError(
+            f"Prediction shape {tuple(pred_depth.shape[-2:])} does not match GT shape {target_hw}. "
+            "Dataset GT should be resized to PromptDA output/RGB size."
         )
     return pred
 
@@ -320,7 +304,7 @@ def main():
             identifiers = batch.get(arkit_dataset_keys.IDENTIFIER, [])
 
             pred = model(image, prompt)
-            pred = align_prediction(pred, depth_gt.shape[-2:])
+            pred = assert_prediction_size(pred, depth_gt.shape[-2:])
             pred_depth = prediction_depth(pred)
             sigma = prediction_sigma(pred)
 

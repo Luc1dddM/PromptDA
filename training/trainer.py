@@ -59,24 +59,13 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            # Extract depth for resize alignment (handle both tensor and dict output)
+            # GT is loaded at PromptDA output/RGB size; mismatches indicate data pipeline drift.
             pred_depth = pred["mu"] if isinstance(pred, dict) else pred
             if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-                if isinstance(pred, dict):
-                    pred["mu"] = torch.nn.functional.interpolate(
-                        pred_depth, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                    if "s" in pred:
-                        pred["s"] = torch.nn.functional.interpolate(
-                            pred["s"], size=depth_gt.shape[-2:],
-                            mode="bilinear", align_corners=False,
-                        )
-                else:
-                    pred = torch.nn.functional.interpolate(
-                        pred, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
+                raise RuntimeError(
+                    f"Prediction shape {tuple(pred_depth.shape[-2:])} does not match "
+                    f"GT shape {tuple(depth_gt.shape[-2:])}."
+                )
 
             if epoch == 1 and batch_idx == 0:
                 trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -111,24 +100,13 @@ class Trainer:
             prompt = batch["low_res_depth_img"].to(self.device)
             pred = self.model(image, prompt)
 
-            # Extract depth tensor for resize and metrics
+            # GT is loaded at PromptDA output/RGB size; mismatches indicate data pipeline drift.
             pred_depth = pred["mu"] if isinstance(pred, dict) else pred
             if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-                if isinstance(pred, dict):
-                    pred["mu"] = torch.nn.functional.interpolate(
-                        pred_depth, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                    if "s" in pred:
-                        pred["s"] = torch.nn.functional.interpolate(
-                            pred["s"], size=depth_gt.shape[-2:],
-                            mode="bilinear", align_corners=False,
-                        )
-                else:
-                    pred = torch.nn.functional.interpolate(
-                        pred, size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
+                raise RuntimeError(
+                    f"Prediction shape {tuple(pred_depth.shape[-2:])} does not match "
+                    f"GT shape {tuple(depth_gt.shape[-2:])}."
+                )
 
             loss, _ = self.loss_fn(pred, depth_gt)
 

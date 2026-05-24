@@ -105,13 +105,20 @@ class SACGModule(nn.Module):
         c_grad = 1.0 - torch.abs(g_rgb - g_depth)
         return c_grad.clamp(0.0, 1.0), g_rgb
 
-    def compute_lidar_field(self, sparse: torch.Tensor) -> torch.Tensor:
+    def compute_lidar_field(
+        self,
+        sparse: torch.Tensor,
+        target_hw: tuple[int, int] | None = None,
+    ) -> torch.Tensor:
         if self.learnable_lidar:
             sparse_mask = (sparse > 0).float()
             field = self.lidar_filter(sparse_mask)
             field = field - field.amin(dim=(-2, -1), keepdim=True)
             denom = field.amax(dim=(-2, -1), keepdim=True).clamp_min(1e-6)
-            return (field / denom).clamp(0.0, 1.0)
+            field = (field / denom).clamp(0.0, 1.0)
+            if target_hw is not None and field.shape[-2:] != target_hw:
+                field = F.interpolate(field, size=target_hw, mode="bilinear", align_corners=False)
+            return field
 
         sparse_np = sparse.detach().cpu().numpy()
         fields = []
@@ -120,7 +127,10 @@ class SACGModule(nn.Module):
             dist = distance_transform_edt(~valid_mask)
             field = np.exp(-dist / self.lidar_sigma).astype(np.float32)
             fields.append(field[None, ...])
-        return torch.from_numpy(np.stack(fields, axis=0)).to(device=sparse.device, dtype=sparse.dtype)
+        field = torch.from_numpy(np.stack(fields, axis=0)).to(device=sparse.device, dtype=sparse.dtype)
+        if target_hw is not None and field.shape[-2:] != target_hw:
+            field = F.interpolate(field, size=target_hw, mode="bilinear", align_corners=False)
+        return field
 
     def forward(
         self,
@@ -130,7 +140,7 @@ class SACGModule(nn.Module):
         dpt_feat: Optional[torch.Tensor] = None,
     ) -> SACGOutput:
         c_grad, edge_strength = self.compute_gradient_consistency(rgb, d_coarse)
-        f_lidar = self.compute_lidar_field(sparse)
+        f_lidar = self.compute_lidar_field(sparse, target_hw=d_coarse.shape[-2:])
 
         gate_in = torch.cat([c_grad, f_lidar, d_coarse], dim=1)
         gate_map = torch.sigmoid(self.gate_net(gate_in))

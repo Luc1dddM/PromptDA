@@ -108,7 +108,6 @@ def build_transforms(split: str | None = None):
             transfroms.AsContiguousArray(),
         ])
     return Compose([
-        transfroms.ModCrop(modulo=32),
         transfroms.ValidDepthMask(gt_low_limit=0.01),
     ])
 
@@ -310,23 +309,10 @@ def main():
 
         pred_depth = pred["mu"] if isinstance(pred, dict) else pred
         if pred_depth.shape[-2:] != depth_gt.shape[-2:]:
-            if isinstance(pred, dict):
-                pred["mu"] = torch.nn.functional.interpolate(
-                    pred_depth, size=depth_gt.shape[-2:],
-                    mode="bilinear", align_corners=False,
-                )
-                if "s" in pred:
-                    pred["s"] = torch.nn.functional.interpolate(
-                        pred["s"], size=depth_gt.shape[-2:],
-                        mode="bilinear", align_corners=False,
-                    )
-                pred_depth = pred["mu"]
-            else:
-                pred = torch.nn.functional.interpolate(
-                    pred, size=depth_gt.shape[-2:],
-                    mode="bilinear", align_corners=False,
-                )
-                pred_depth = pred
+            raise RuntimeError(
+                f"Prediction shape {tuple(pred_depth.shape[-2:])} does not match "
+                f"GT shape {tuple(depth_gt.shape[-2:])}."
+            )
 
         loss, _ = trainer.loss_fn(pred, depth_gt)
 

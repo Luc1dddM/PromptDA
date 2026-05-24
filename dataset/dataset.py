@@ -6,8 +6,6 @@ from . import dataset_keys
 
 from data.ARKitScenes.depth_upsampling.dataset import ARKitScenesDataset
 from data.ARKitScenes.depth_upsampling.data_utils import image_hwc_to_chw, expand_channel_dim
-from promptda.utils.io_wrapper import ensure_multiple_of
-
 MILLIMETER_TO_METER = 1000
 WIDE = 'wide'
 PATCH_SIZE = 14  # DINOv2 patch size
@@ -111,13 +109,14 @@ class MyARKitScenesDataset(ARKitScenesDataset):
         color_img = self.load_image(rgb_file, self.high_res, False, direction)
         _, img_h, img_w = color_img.shape  # will be (3, 756, 1008)
 
-        # Load depths resized to match RGB exactly
+        # GT follows the PromptDA output/RGB size. The native low-res prompt is
+        # kept unchanged, matching the official PromptDA inference path.
         sample[dataset_keys.COLOR_IMG]          = color_img
         sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(
-            depth_file, self.high_res, True, direction, target_hw=self.high_res
+            depth_file, self.high_res, True, direction, target_hw=TARGET_HW
         )
         sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(
-            apple_file, self.low_res, True, direction, target_hw=TARGET_HW
+            apple_file, self.low_res, True, direction, target_hw=self.low_res
         )
 
         # # Boxes: derived from fixed RGB size, no change needed
