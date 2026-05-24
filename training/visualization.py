@@ -1,28 +1,50 @@
 """
-Visualization utilities for aleatoric uncertainty in depth completion.
-
-Produces a 1×4 figure: RGB | Target Depth | Predicted μ | Predicted σ (Uncertainty)
+Visualization utilities for depth prediction, SACG comparison, and uncertainty.
 """
 
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 
-def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    """Detach, move to CPU, and convert to numpy (H, W) float32."""
+def _to_numpy(tensor: torch.Tensor | np.ndarray | None) -> np.ndarray | None:
     if tensor is None:
         return None
-    t = tensor.detach().cpu()
-    while t.ndim > 2:
-        t = t.squeeze(0)   # remove batch dim, then channel dim
-    return t.float().numpy()
+    if isinstance(tensor, np.ndarray):
+        arr = tensor
+    else:
+        arr = tensor.detach().cpu().float().numpy()
+    while arr.ndim > 0 and arr.shape[0] == 1:
+        arr = arr[0]
+    return arr
+
+
+def _rgb_to_numpy(rgb: torch.Tensor | np.ndarray | None) -> np.ndarray | None:
+    rgb_np = _to_numpy(rgb)
+    if rgb_np is None:
+        return None
+    if rgb_np.ndim == 3 and rgb_np.shape[0] == 3:
+        rgb_np = np.transpose(rgb_np, (1, 2, 0))
+    if rgb_np.max() > 1.5:
+        rgb_np = rgb_np / 255.0
+    return np.clip(rgb_np, 0.0, 1.0)
+
+
+def _depth_to_numpy(depth: torch.Tensor | np.ndarray | None) -> np.ndarray | None:
+    depth_np = _to_numpy(depth)
+    if depth_np is None:
+        return None
+    if depth_np.ndim == 3 and depth_np.shape[0] == 1:
+        depth_np = depth_np[0]
+    if depth_np.ndim != 2:
+        raise ValueError(f"Expected depth map with shape [H,W] or [1,H,W], got {depth_np.shape}")
+    return depth_np.astype(np.float32, copy=False)
 
 
 def _normalize_sigma(sigma: np.ndarray, percentile: float = 99.0) -> tuple[np.ndarray, float]:
-    """Clip sigma to [0, percentile] range for visualization, return (clipped, vmax)."""
     vmax = np.percentile(sigma, percentile)
     if vmax <= 0:
         vmax = 1.0
@@ -30,99 +52,233 @@ def _normalize_sigma(sigma: np.ndarray, percentile: float = 99.0) -> tuple[np.nd
     return clipped, vmax
 
 
+def _depth_limits(*depth_maps: np.ndarray | None) -> tuple[float, float]:
+    for depth in depth_maps:
+        if depth is None:
+            continue
+        valid = np.isfinite(depth) & (depth > 0)
+        if valid.any():
+            return float(depth[valid].min()), float(depth[valid].max())
+    return 0.0, 1.0
+
+
+def _error_limits(*error_maps: np.ndarray | None) -> float:
+    max_value = 0.0
+    for error in error_maps:
+        if error is None:
+            continue
+        valid = np.isfinite(error)
+        if valid.any():
+            max_value = max(max_value, float(error[valid].max()))
+    return max(max_value, 1e-6)
+
+
+def _draw_depth(ax, depth: np.ndarray | None, title: str, vmin: float, vmax: float):
+    if depth is None:
+        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+    else:
+        ax.imshow(depth, cmap="jet", vmin=vmin, vmax=vmax)
+        ax.set_title(f"{title}\n[{vmin:.2f}, {vmax:.2f}]")
+    ax.axis("off")
+
+
+def _draw_map(
+    ax,
+    value_map: np.ndarray | None,
+    title: str,
+    cmap: str = "magma",
+    vmin: float | None = None,
+    vmax: float | None = None,
+    add_colorbar: bool = False,
+):
+    if value_map is None:
+        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        ax.axis("off")
+        return
+
+    im = ax.imshow(value_map, cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_title(title)
+    ax.axis("off")
+    if add_colorbar:
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+
+def _draw_sparse_overlay(ax, rgb_np: np.ndarray | None, sparse_np: np.ndarray | None):
+    if rgb_np is None and sparse_np is None:
+        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title("Sparse LiDAR")
+        ax.axis("off")
+        return
+
+    if rgb_np is not None:
+        ax.imshow(rgb_np)
+    elif sparse_np is not None:
+        ax.imshow(np.zeros((*sparse_np.shape, 3), dtype=np.float32))
+
+    if sparse_np is not None:
+        valid = sparse_np > 0
+        if valid.any():
+            ax.imshow(np.where(valid, sparse_np, np.nan), cmap="turbo", alpha=0.85)
+    ax.set_title("Sparse LiDAR")
+    ax.axis("off")
+
+
 def plot_uncertainty(
-    rgb: torch.Tensor | None = None,
-    target: torch.Tensor | None = None,
-    mu: torch.Tensor | None = None,
-    sigma: torch.Tensor | None = None,
+    rgb: torch.Tensor | np.ndarray | None = None,
+    target: torch.Tensor | np.ndarray | None = None,
+    mu: torch.Tensor | np.ndarray | None = None,
+    sigma: torch.Tensor | np.ndarray | None = None,
+    baseline: torch.Tensor | np.ndarray | None = None,
     save_path: str | None = None,
     sigma_percentile: float = 99.0,
-    figsize: tuple = (20, 5),
+    figsize: tuple | None = None,
     dpi: int = 150,
 ):
-    """Draw a 1×4 figure for uncertainty visualization.
+    rgb_np = _rgb_to_numpy(rgb)
+    target_np = _depth_to_numpy(target)
+    baseline_np = _depth_to_numpy(baseline)
+    mu_np = _depth_to_numpy(mu)
+    sigma_np = _depth_to_numpy(sigma)
 
-    Args:
-        rgb:          RGB image tensor [3, H, W] or [1, 3, H, W], values in [0, 1] or [0, 255].
-        target:       GT depth tensor [1, H, W] or [H, W].
-        mu:           Predicted depth tensor [1, H, W] or [H, W].
-        sigma:        Predicted uncertainty (σ) tensor [1, H, W] or [H, W].
-        save_path:    If provided, save figure to this path.
-        sigma_percentile: Percentile for clipping σ outliers (default 99).
-        figsize:      Figure size (width, height).
-        dpi:          Output resolution.
-    """
-    fig, axes = plt.subplots(1, 4, figsize=figsize, dpi=dpi)
+    columns = [("rgb", "RGB"), ("target", "Target Depth")]
+    if baseline_np is not None:
+        columns.append(("baseline", "Baseline Depth"))
+    if mu_np is not None:
+        columns.append(("mu", "Predicted mu"))
+    if sigma_np is not None:
+        columns.append(("sigma", "Uncertainty sigma"))
 
-    # --- Column 1: RGB ---
-    ax = axes[0]
-    if rgb is not None:
-        rgb_np = _to_numpy(rgb)
-        if rgb_np.ndim == 3 and rgb_np.shape[0] == 3:
-            rgb_np = np.transpose(rgb_np, (1, 2, 0))   # CHW → HWC
-        if rgb_np.max() > 1.5:
-            rgb_np = rgb_np / 255.0
-        rgb_np = np.clip(rgb_np, 0.0, 1.0)
-        ax.imshow(rgb_np)
-        ax.set_title("RGB")
-    else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("RGB")
-    ax.axis("off")
+    if figsize is None:
+        figsize = (5 * len(columns), 5)
 
-    # --- Column 2: Target Depth ---
-    ax = axes[1]
-    if target is not None:
-        target_np = _to_numpy(target)
-        valid = target_np > 0
-        vmin = target_np[valid].min() if valid.any() else 0
-        vmax = target_np[valid].max() if valid.any() else 1
-        ax.imshow(target_np, cmap="jet", vmin=vmin, vmax=vmax)
-        ax.set_title(f"Target Depth\n[{vmin:.2f}, {vmax:.2f}]")
-    else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Target Depth")
-    ax.axis("off")
+    fig, axes = plt.subplots(1, len(columns), figsize=figsize, dpi=dpi)
+    axes = np.atleast_1d(axes)
+    depth_vmin, depth_vmax = _depth_limits(target_np, baseline_np, mu_np)
 
-    # --- Column 3: Predicted μ ---
-    ax = axes[2]
-    if mu is not None:
-        mu_np = _to_numpy(mu)
-        valid = target_np > 0 if target is not None and target_np is not None else np.ones_like(mu_np, dtype=bool)
-        # Use target's vmin/vmax if available for fair comparison
-        if target is not None:
-            t_np = _to_numpy(target)
-            tv = t_np[t_np > 0]
-            if tv.size:
-                vmin_t, vmax_t = tv.min(), tv.max()
-        else:
-            vmin_t, vmax_t = mu_np.min(), mu_np.max()
-        ax.imshow(mu_np, cmap="jet", vmin=vmin_t, vmax=vmax_t)
-        ax.set_title(f"Predicted μ\n[{vmin_t:.2f}, {vmax_t:.2f}]")
-    else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Predicted μ")
-    ax.axis("off")
-
-    # --- Column 4: Predicted σ (Uncertainty Map) ---
-    ax = axes[3]
-    if sigma is not None:
-        sigma_np = _to_numpy(sigma)
-        sigma_clipped, vmax_s = _normalize_sigma(sigma_np, sigma_percentile)
-        im = ax.imshow(sigma_clipped, cmap="magma", vmin=0.0, vmax=vmax_s)
-        ax.set_title(f"Uncertainty σ\n[0, {vmax_s:.4f}] (p{sigma_percentile})")
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
-        ax.set_title("Uncertainty σ")
-    ax.axis("off")
+    for ax, (kind, title) in zip(axes, columns):
+        if kind == "rgb":
+            if rgb_np is not None:
+                ax.imshow(rgb_np)
+                ax.set_title(title)
+            else:
+                ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
+                ax.set_title(title)
+            ax.axis("off")
+        elif kind == "target":
+            _draw_depth(ax, target_np, title, depth_vmin, depth_vmax)
+        elif kind == "baseline":
+            _draw_depth(ax, baseline_np, title, depth_vmin, depth_vmax)
+        elif kind == "mu":
+            _draw_depth(ax, mu_np, title, depth_vmin, depth_vmax)
+        elif kind == "sigma":
+            sigma_clipped, vmax_s = _normalize_sigma(sigma_np, sigma_percentile)
+            _draw_map(
+                ax,
+                sigma_clipped,
+                f"Uncertainty sigma\n[0, {vmax_s:.4f}] (p{sigma_percentile:g})",
+                cmap="magma",
+                vmin=0.0,
+                vmax=vmax_s,
+                add_colorbar=True,
+            )
 
     plt.tight_layout()
-
     if save_path is not None:
         plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
         plt.close(fig)
     else:
         plt.show()
+    return fig
 
+
+def plot_sacg_comparison(
+    rgb: torch.Tensor | np.ndarray,
+    sparse_depth: torch.Tensor | np.ndarray,
+    target: torch.Tensor | np.ndarray,
+    baseline_depth: torch.Tensor | np.ndarray,
+    refined_depth: torch.Tensor | np.ndarray,
+    gate_map: torch.Tensor | np.ndarray | None = None,
+    c_grad: torch.Tensor | np.ndarray | None = None,
+    f_lidar: torch.Tensor | np.ndarray | None = None,
+    save_path: str | None = None,
+    figsize: tuple = (24, 12),
+    dpi: int = 150,
+):
+    rgb_np = _rgb_to_numpy(rgb)
+    sparse_np = _depth_to_numpy(sparse_depth)
+    target_np = _depth_to_numpy(target)
+    baseline_np = _depth_to_numpy(baseline_depth)
+    refined_np = _depth_to_numpy(refined_depth)
+    gate_np = _depth_to_numpy(gate_map)
+    c_grad_np = _depth_to_numpy(c_grad)
+    f_lidar_np = _depth_to_numpy(f_lidar)
+
+    baseline_error = None
+    refined_error = None
+    if target_np is not None and baseline_np is not None:
+        baseline_error = np.abs(baseline_np - target_np)
+    if target_np is not None and refined_np is not None:
+        refined_error = np.abs(refined_np - target_np)
+
+    depth_vmin, depth_vmax = _depth_limits(target_np, baseline_np, refined_np, sparse_np)
+    err_vmax = _error_limits(baseline_error, refined_error)
+
+    fig, axes = plt.subplots(2, 4, figsize=figsize, dpi=dpi)
+    axes = axes.reshape(2, 4)
+
+    if rgb_np is not None:
+        axes[0, 0].imshow(rgb_np)
+        axes[0, 0].set_title("RGB")
+    else:
+        axes[0, 0].text(0.5, 0.5, "N/A", ha="center", va="center", transform=axes[0, 0].transAxes)
+        axes[0, 0].set_title("RGB")
+    axes[0, 0].axis("off")
+
+    _draw_sparse_overlay(axes[0, 1], rgb_np, sparse_np)
+    _draw_depth(axes[0, 2], baseline_np, "Baseline Coarse", depth_vmin, depth_vmax)
+    _draw_depth(axes[0, 3], refined_np, "SACG Refined", depth_vmin, depth_vmax)
+
+    _draw_map(
+        axes[1, 0],
+        baseline_error,
+        "Baseline Error",
+        cmap="inferno",
+        vmin=0.0,
+        vmax=err_vmax,
+        add_colorbar=True,
+    )
+    _draw_map(
+        axes[1, 1],
+        refined_error,
+        "SACG Error",
+        cmap="inferno",
+        vmin=0.0,
+        vmax=err_vmax,
+        add_colorbar=True,
+    )
+    _draw_map(axes[1, 2], gate_np, "Gate Map", cmap="magma", vmin=0.0, vmax=1.0, add_colorbar=True)
+
+    component_map = c_grad_np if c_grad_np is not None else f_lidar_np
+    component_title = "C_grad" if c_grad_np is not None else "F_lidar"
+    if c_grad_np is not None and f_lidar_np is not None:
+        component_map = 0.5 * (c_grad_np + f_lidar_np)
+        component_title = "0.5*(C_grad + F_lidar)"
+    _draw_map(
+        axes[1, 3],
+        component_map,
+        component_title,
+        cmap="viridis",
+        vmin=0.0,
+        vmax=1.0,
+        add_colorbar=True,
+    )
+
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+    else:
+        plt.show()
     return fig

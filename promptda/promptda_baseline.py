@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from promptda.model.dpt import DPTHead
 from promptda.model.config import model_configs
 from promptda.utils.logger import Log
@@ -12,6 +13,11 @@ class PromptDA(nn.Module):
     use_bn = False
     use_clstoken = False
     output_act = 'sigmoid'
+    HF_REPOS = {
+        'vits': 'depth-anything/prompt-depth-anything-vits',
+        'vitb': 'depth-anything/prompt-depth-anything-vitb',
+        'vitl': 'depth-anything/prompt-depth-anything-vitl',
+    }
 
     def __init__(self,
                  encoder='vitl',
@@ -62,16 +68,25 @@ class PromptDA(nn.Module):
         dpt_variant='legacy',
         **hf_kwargs,
     ):
-        if hf_kwargs:
-            Log.warn(f"Unused kwargs in baseline from_pretrained: {list(hf_kwargs.keys())}")
+        if pretrained_model_name_or_path is None:
+            pretrained_model_name_or_path = cls.HF_REPOS[encoder]
 
-        if pretrained_model_name_or_path is not None:
-            Log.warn(
-                "Ignoring pretrained_model_name_or_path in baseline training flow. "
-                "Only DINOv2 backbone pretrained weights are loaded."
+        if Path(pretrained_model_name_or_path).exists():
+            ckpt_path = pretrained_model_name_or_path
+            Log.info(f"[from_pretrained] Using local checkpoint: {ckpt_path}")
+        else:
+            Log.info(
+                f"[from_pretrained] Downloading PromptDA checkpoint "
+                f"from HF repo: {pretrained_model_name_or_path}"
+            )
+            ckpt_path = hf_hub_download(
+                repo_id=pretrained_model_name_or_path,
+                repo_type="model",
+                filename="model.ckpt",
+                **hf_kwargs,
             )
 
-        return cls(encoder=encoder, ckpt_path=None, dpt_variant=dpt_variant)
+        return cls(encoder=encoder, ckpt_path=ckpt_path, dpt_variant=dpt_variant)
 
 
     def _freeze_backbone_only_train_head(self):
@@ -85,8 +100,10 @@ class PromptDA(nn.Module):
         if os.path.exists(ckpt_path):
             Log.info(f'Loading checkpoint from {ckpt_path}')
             checkpoint = torch.load(ckpt_path, map_location='cpu')
-            state_dict = checkpoint.get('state_dict', checkpoint)
-            if all(k.startswith('model.') for k in state_dict.keys()):
+            state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+            if all(k.startswith('pipeline.') for k in state_dict.keys()):
+                state_dict = {k[9:]: v for k, v in state_dict.items()}
+            elif all(k.startswith('model.') for k in state_dict.keys()):
                 state_dict = {k[6:]: v for k, v in state_dict.items()}
             missing, unexpected = self.load_state_dict(state_dict, strict=False)
             if missing:
