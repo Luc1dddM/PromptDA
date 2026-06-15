@@ -8,6 +8,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from skimage.metrics import structural_similarity as ssim
 
 
 def _to_numpy(tensor: torch.Tensor | np.ndarray | None) -> np.ndarray | None:
@@ -71,6 +72,23 @@ def _error_limits(*error_maps: np.ndarray | None) -> float:
         if valid.any():
             max_value = max(max_value, float(error[valid].max()))
     return max(max_value, 1e-6)
+
+
+def _ssim_map(pred: np.ndarray | None, target: np.ndarray | None) -> np.ndarray | None:
+    if pred is None or target is None:
+        return None
+    if pred.shape[0] < 7 or pred.shape[1] < 7:
+        return None
+    valid = np.isfinite(pred) & np.isfinite(target) & (pred > 0) & (target > 0)
+    if not valid.any():
+        return None
+    p, t = pred.copy(), target.copy()
+    p[~valid] = 0
+    t[~valid] = 0
+    dr = max(p[valid].max() - p[valid].min(), t[valid].max() - t[valid].min(), 1e-6)
+    ssim_map = ssim(p, t, data_range=dr, win_size=7, gaussian_weights=True, sigma=1.5, full=True)[1]
+    ssim_map[~valid] = np.nan
+    return ssim_map.astype(np.float32)
 
 
 def _draw_depth(ax, depth: np.ndarray | None, title: str, vmin: float, vmax: float):
@@ -203,7 +221,7 @@ def plot_sacg_comparison(
     c_grad: torch.Tensor | np.ndarray | None = None,
     f_lidar: torch.Tensor | np.ndarray | None = None,
     save_path: str | None = None,
-    figsize: tuple = (24, 12),
+    figsize: tuple = (24, 18),
     dpi: int = 150,
 ):
     rgb_np = _rgb_to_numpy(rgb)
@@ -222,11 +240,20 @@ def plot_sacg_comparison(
     if target_np is not None and refined_np is not None:
         refined_error = np.abs(refined_np - target_np)
 
+    baseline_ssim = _ssim_map(baseline_np, target_np)
+    refined_ssim = _ssim_map(refined_np, target_np)
+
     depth_vmin, depth_vmax = _depth_limits(target_np, baseline_np, refined_np, sparse_np)
     err_vmax = _error_limits(baseline_error, refined_error)
+    ssim_maps = [m for m in (baseline_ssim, refined_ssim) if m is not None]
+    ssim_vmin, ssim_vmax = (0.0, 1.0)
+    if ssim_maps:
+        all_valid = np.concatenate([m[np.isfinite(m)] for m in ssim_maps])
+        if len(all_valid):
+            ssim_vmin, ssim_vmax = float(all_valid.min()), float(all_valid.max())
 
-    fig, axes = plt.subplots(2, 4, figsize=figsize, dpi=dpi)
-    axes = axes.reshape(2, 4)
+    fig, axes = plt.subplots(3, 4, figsize=figsize, dpi=dpi)
+    axes = axes.reshape(3, 4)
 
     if rgb_np is not None:
         axes[0, 0].imshow(rgb_np)
@@ -274,6 +301,41 @@ def plot_sacg_comparison(
         vmax=1.0,
         add_colorbar=True,
     )
+
+    _draw_map(
+        axes[2, 0],
+        baseline_ssim,
+        f"Baseline SSIM\n[{ssim_vmin:.3f}, {ssim_vmax:.3f}]",
+        cmap="RdYlGn",
+        vmin=ssim_vmin,
+        vmax=ssim_vmax,
+        add_colorbar=True,
+    )
+    _draw_map(
+        axes[2, 1],
+        refined_ssim,
+        f"SACG SSIM\n[{ssim_vmin:.3f}, {ssim_vmax:.3f}]",
+        cmap="RdYlGn",
+        vmin=ssim_vmin,
+        vmax=ssim_vmax,
+        add_colorbar=True,
+    )
+    ssim_diff = None
+    if baseline_ssim is not None and refined_ssim is not None:
+        ssim_diff = refined_ssim - baseline_ssim
+        diff_vmax = max(abs(np.nanmin(ssim_diff)), abs(np.nanmax(ssim_diff)), 1e-6)
+        _draw_map(
+            axes[2, 2],
+            ssim_diff,
+            f"SSIM Δ (SACG−Base)\n±{diff_vmax:.3f}",
+            cmap="RdBu",
+            vmin=-diff_vmax,
+            vmax=diff_vmax,
+            add_colorbar=True,
+        )
+    else:
+        _draw_map(axes[2, 2], None, "SSIM Δ (SACG−Base)", cmap="RdBu")
+    _draw_depth(axes[2, 3], target_np, "Target Depth", depth_vmin, depth_vmax)
 
     plt.tight_layout()
     if save_path is not None:
