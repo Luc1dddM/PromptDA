@@ -80,7 +80,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=2)
     p.add_argument("--lr_sacg", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--num_iter", type=int, default=20000)
+    p.add_argument("--num_iter", type=int, default=10000)
     p.add_argument("--log_freq", type=int, default=200)
     p.add_argument("--eval_freq", type=int, default=1000)
     p.add_argument("--save_freq", type=int, default=5000)
@@ -97,6 +97,8 @@ def parse_args():
     p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--log_dir", type=str, default="log")
     p.add_argument("--tbp", type=int, default=None)
+    p.add_argument("--compare_after_train", type=str2bool, default=True)
+    p.add_argument("--compare_save_visuals", type=str2bool, default=True)
     return p.parse_args()
 
 
@@ -312,6 +314,48 @@ def save_visuals(model: PromptDASACG, loader, device: torch.device, output_dir: 
     return saved
 
 
+def run_compare_inference(args, ckpt_dir: Path):
+    best_ckpt = ckpt_dir / "best.pth"
+    if not best_ckpt.exists():
+        Log.warn(f"Skipping compare_inference: best checkpoint not found at {best_ckpt}")
+        return
+
+    compare_script = Path(__file__).resolve().parents[1] / "compare_inference.py"
+    command = [
+        sys.executable,
+        str(compare_script),
+        "--data_root",
+        args.data_root,
+        "--split",
+        "val",
+        "--num_workers",
+        str(args.num_workers),
+        "--encoder",
+        args.encoder,
+        "--dpt_variant",
+        args.dpt_variant,
+        "--sacg_ckpt",
+        str(best_ckpt),
+        "--batch_size",
+        "1",
+        "--output_dir",
+        str(ckpt_dir / "compare_best"),
+        "--num_visuals",
+        str(args.num_visuals),
+    ]
+    if args.promptda_ckpt is not None:
+        command.extend(["--baseline_ckpt", args.promptda_ckpt])
+    if args.max_val_samples is not None:
+        command.extend(["--max_samples", str(args.max_val_samples)])
+    if args.learnable_lidar:
+        command.append("--learnable_lidar")
+    if args.compare_save_visuals:
+        command.append("--save_visuals")
+
+    Log.info(f"Running compare_inference with best checkpoint: {best_ckpt}")
+    subprocess.run(command, check=True)
+
+
 def main():
     args = parse_args()
     set_seed(args.seed)
@@ -515,6 +559,8 @@ def main():
         tensorboard_process.terminate()
     if wandb_run is not None:
         wandb_run.finish()
+    if args.compare_after_train:
+        run_compare_inference(args, ckpt_dir)
 
 
 if __name__ == "__main__":
