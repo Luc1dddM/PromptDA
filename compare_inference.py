@@ -194,7 +194,7 @@ def main():
 
     improvements = {}
     lower_is_better = {"L1", "RMSE", "AbsRel", "BoundaryAbsRel"}
-    higher_is_better = {"delta1", "delta2", "delta3"}
+    higher_is_better = {"delta1", "delta2", "delta3", "SSIM"}
     for key in sorted(set(baseline_agg.keys()) | set(sacg_agg.keys())):
         if key not in baseline_agg or key not in sacg_agg:
             continue

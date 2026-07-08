@@ -1,8 +1,10 @@
 import math
 import sys
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from skimage.metrics import structural_similarity as compute_ssim
 
 from data.ARKitScenes.depth_upsampling import dataset_keys as arkit_dataset_keys
 
@@ -116,6 +118,7 @@ def compute_depth_metrics(
             "delta1": float("nan"),
             "delta2": float("nan"),
             "delta3": float("nan"),
+            "SSIM": float("nan"),
         }
         if rgb is not None:
             metrics["BoundaryAbsRel"] = float("nan")
@@ -132,6 +135,7 @@ def compute_depth_metrics(
         "delta1": torch.mean((ratio < 1.25).float()).item(),
         "delta2": torch.mean((ratio < 1.25 ** 2).float()).item(),
         "delta3": torch.mean((ratio < 1.25 ** 3).float()).item(),
+        "SSIM": compute_ssim_metric(pred, gt),
     }
 
     if rgb is not None:
@@ -164,3 +168,27 @@ def aggregate_metrics(metrics_list: list[dict]) -> dict:
             values.append(value)
         aggregated[key] = sum(values) / len(values) if values else float("nan")
     return aggregated
+
+
+@torch.no_grad()
+def compute_ssim_metric(pred: torch.Tensor, gt: torch.Tensor) -> float:
+    """Image-level SSIM averaged over batch (skimage, returns value in [-1, 1])."""
+    valid_mask = (gt > 0) & torch.isfinite(gt) & torch.isfinite(pred)
+    ssim_vals = []
+    for b in range(pred.shape[0]):
+        p = pred[b, 0].cpu().numpy()
+        t = gt[b, 0].cpu().numpy()
+        v = valid_mask[b, 0].cpu().numpy()
+        if not v.any() or p.shape[0] < 7 or p.shape[1] < 7:
+            ssim_vals.append(float("nan"))
+            continue
+        dr = max(float(t[v].max() - t[v].min()), 1e-6)
+        if np.isnan(dr) or dr <= 0:
+            ssim_vals.append(float("nan"))
+            continue
+        p[~v] = 0
+        t[~v] = 0
+        val = compute_ssim(p, t, data_range=dr, win_size=7)
+        ssim_vals.append(float(val))
+    values = [x for x in ssim_vals if not math.isnan(x)]
+    return sum(values) / len(values) if values else float("nan")
