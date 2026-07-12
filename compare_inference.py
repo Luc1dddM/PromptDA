@@ -132,6 +132,8 @@ def save_visual(
 
 def main():
     args = parse_args()
+    lidar_tag = "no_lidar" if args.ablate_lidar else "with_lidar"
+    args.output_dir = os.path.join(args.output_dir, lidar_tag)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(args.output_dir, exist_ok=True)
     visuals_dir = os.path.join(args.output_dir, "visualizations")
