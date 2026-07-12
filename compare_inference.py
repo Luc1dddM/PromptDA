@@ -57,6 +57,7 @@ def parse_args():
         help="Optional SACG checkpoint. If omitted, SACG runs with random refinement weights for component debugging.",
     )
     p.add_argument("--learnable_lidar", action="store_true")
+    p.add_argument("--ablate_lidar", action="store_true")
 
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--output_dir", type=str, default="results/sacg_compare")
@@ -159,6 +160,7 @@ def main():
         dpt_variant=args.dpt_variant,
         sacg_ckpt=args.sacg_ckpt,
         learnable_lidar=args.learnable_lidar,
+        ablate_lidar=args.ablate_lidar,
     ).to(device).eval()
 
     baseline_metrics = []

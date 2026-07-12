@@ -59,12 +59,14 @@ class SACGModule(nn.Module):
         lidar_sigma: float = 50.0,
         learnable_lidar: bool = False,
         lidar_kernel_size: int = 31,
+        ablate_lidar: bool = False,
     ):
         super().__init__()
         self.rgb_channels = rgb_channels
         self.dpt_channels = dpt_channels
         self.lidar_sigma = lidar_sigma
         self.learnable_lidar = learnable_lidar
+        self.ablate_lidar = ablate_lidar
 
         gate_in_channels = 3
         refine_in_channels = rgb_channels + 1 + dpt_channels
@@ -140,7 +142,10 @@ class SACGModule(nn.Module):
         dpt_feat: Optional[torch.Tensor] = None,
     ) -> SACGOutput:
         c_grad, edge_strength = self.compute_gradient_consistency(rgb, d_coarse)
-        f_lidar = self.compute_lidar_field(sparse, target_hw=d_coarse.shape[-2:])
+        if self.ablate_lidar:
+            f_lidar = torch.zeros_like(d_coarse)
+        else:
+            f_lidar = self.compute_lidar_field(sparse, target_hw=d_coarse.shape[-2:])
 
         gate_in = torch.cat([c_grad, f_lidar, d_coarse], dim=1)
         gate_map = torch.sigmoid(self.gate_net(gate_in))
@@ -210,6 +215,7 @@ class PromptDASACG(nn.Module):
         dpt_variant: str = "legacy",
         sacg_ckpt: Optional[str] = None,
         learnable_lidar: bool = False,
+        ablate_lidar: bool = False,
     ) -> "PromptDASACG":
         promptda = PromptDA.from_pretrained(
             pretrained_model_name_or_path=promptda_ckpt,
@@ -221,6 +227,7 @@ class PromptDASACG(nn.Module):
         sacg = SACGModule(
             dpt_channels=dpt_channels,
             learnable_lidar=learnable_lidar,
+            ablate_lidar=ablate_lidar,
         )
         model = cls(promptda=promptda, sacg=sacg)
         if sacg_ckpt is not None:

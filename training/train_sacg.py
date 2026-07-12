@@ -72,6 +72,7 @@ def parse_args():
     )
     p.add_argument("--resume", type=str, default=None)
     p.add_argument("--learnable_lidar", type=str2bool, default=False)
+    p.add_argument("--ablate_lidar", type=str2bool, default=False)
 
     p.add_argument("--run_name", type=str, default="sacg")
     p.add_argument("--checkpoint_dir", type=str, default="./checkpoints")
@@ -199,6 +200,7 @@ def build_model(args, device: torch.device) -> PromptDASACG:
         dpt_variant=args.dpt_variant,
         sacg_ckpt=None,
         learnable_lidar=args.learnable_lidar,
+        ablate_lidar=args.ablate_lidar,
     ).to(device)
     freeze_check(model)
     return model
@@ -349,6 +351,8 @@ def run_compare_inference(args, ckpt_dir: Path):
         command.extend(["--max_samples", str(args.max_val_samples)])
     if args.learnable_lidar:
         command.append("--learnable_lidar")
+    if args.ablate_lidar:
+        command.append("--ablate_lidar")
     if args.compare_save_visuals:
         command.append("--save_visuals")
 
