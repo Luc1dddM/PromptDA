@@ -1,0 +1,12 @@
+\section{Experimental Protocol}
+\paragraph{Data.}
+We use ARKitScenes \cite{baruch2021arkitscenes}, whose committed evaluation includes 5,599 validation frames, and a locally prepared ScanNet++ \cite{yeshwanth2023scannetpp} export with 2,000 evaluated frames per run and 20,000 training-subset frames. The latter is not the official PromptDA benchmark protocol. RGB and dense target tensors are $756\times1008$; the prompt retains its native low-resolution grid. Depth is converted from millimeters to meters. Targets are resized by nearest neighbor. Training uses synchronized horizontal flips, while evaluation uses no augmentation.
+
+\paragraph{Optimization.}
+The pretrained PromptDA ViT-L and legacy DPT head remain frozen. The refinement module uses AdamW with learning rate $10^{-4}$, weight decay $10^{-4}$, batch size two, cosine scheduler and 10,000 optimization steps. The gate penalty begins at step 5,000; the selected variant disables boundary loss. The best validation-L1 checkpoint is selected.
+
+\paragraph{Baselines.}
+Frozen PromptDA requires no downstream training. A separately trained simple residual CNN has six input channels: RGB (three), PromptDA depth (one), resized LiDAR metric values (one), and validity mask (one). Its three hidden convolution blocks have 56 channels; it is optimized with valid-pixel L1. This \textbf{does not fine-tune PromptDA}. Ablations vary LiDAR gate fields and optional boundary loss.
+
+\paragraph{Metrics and validity.}
+L1, AbsRel and RMSE use finite ground-truth depth strictly above $0.01$\,m, computed per frame and then averaged across images. RGB-edge BoundaryAbsRel uses Sobel RGB edges (threshold 0.1; dilation 5), not annotated depth discontinuities. SSIM is computed with invalid regions zero-filled and is auxiliary. All seed-10 ARKitScenes rows use the same 5,599-frame manifest (SHA-256 \texttt{5b8a182fd4fba0dead6371b54d15c96974d7f5f853074b210b7c50ea3f3dd2b9}). The selected model was chosen using validation results, not an unseen test split; cross-seed ScanNet++ sample sets also vary.
