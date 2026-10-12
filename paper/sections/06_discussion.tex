@@ -1,0 +1,9 @@
+\section{Discussion and Conclusion}
+
+Removing the exponential RGB-edge boundary loss coincides with lower AbsRel and L1 for one ARKitScenes validation seed. A potential explanation is that the previous loss overweights appearance texture, but this has not been tested causally. SACG without boundary loss still uses edge consistency inside its gate.
+
+The simple CNN is a meaningful and competitive control. It narrowly trails SACG in L1 and AbsRel but improves RMSE, RGB-edge BoundaryAbsRel and SSIM relative to the selected method. Because the CNN consumes metric LiDAR values directly whereas SACG refinement uses frozen DPT features, this is not a clean isolated test of gating.
+
+Limitations include no calibrated uncertainty supervision, no explicit preservation of valid LiDAR observations in refined depth, no guarantee of positive output depth, no independent scene-held-out test, no three-seed results for the selected objective, and no selected-model ScanNet++ evaluation. The evaluation split also influenced method choice.
+
+In summary, SACG combines frozen PromptDA with a learned validity-guided spatial gate and a DPT-feature residual. The no-boundary training variant shows promising but small single-seed improvements. Robust claims about architectural advantage require additional controlled ablations and independent evaluation.
