@@ -1,0 +1,9 @@
+\section{Related Work}
+\paragraph{Guided depth completion.}
+Sparse-to-Dense \cite{ma2018sparse} fuses RGB and sparse range measurements. NLSPN \cite{park2020nlspn} applies learned nonlocal spatial propagation to refine depth. Hence spatial refinement itself is not a new invention; our comparison must establish whether the particular implementation adds value relative to simple controls.
+
+\paragraph{Prompt-based depth foundation models.}
+DINOv2 \cite{oquab2024dinov2} supplies reusable visual features, and Depth Anything \cite{yang2024depthanything} scales depth pretraining. PromptDA \cite{lin2025promptda} combines an image with a metric depth prompt. We adopt frozen pretrained PromptDA ViT-L and use its predictions and intermediate DPT features without updating the backbone or decoder.
+
+\paragraph{Gated residual heads.}
+The SACG gate depends on normalized RGB--depth edge agreement and the spatial layout of valid depth observations. It should not be described as calibrated uncertainty. A separately trained plain CNN is an essential baseline; it directly receives resized LiDAR depth and validity, whereas SACG additionally receives frozen DPT features but only a validity-derived LiDAR gating field. This input mismatch limits a pure causal attribution to gating.
