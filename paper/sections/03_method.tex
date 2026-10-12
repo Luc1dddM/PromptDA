@@ -1,0 +1,34 @@
+\section{Method}
+\subsection{Frozen backbone and coarse depth}
+Let $I\in[0,1]^{3\times H\times W}$ be RGB, $S$ the low-resolution metric LiDAR prompt, and $D^\star$ the reference. A pretrained, frozen PromptDA $P_\theta$ produces
+\begin{equation}D_0=P_\theta(I,S), \qquad \nabla_\theta \mathcal L=0.\end{equation}
+A forward hook exposes frozen decoder features $F$ from \texttt{depth\_head.scratch.output\_conv1}, all under \texttt{torch.no\_grad()}.
+
+\subsection{Gradient consistency}
+The code calculates Sobel-gradient magnitudes and normalizes each image by its maximum. Let
+\begin{equation}E(X)=\frac{\sqrt{(K_x*X)^2+(K_y*X)^2+\epsilon}}{\max_{u,v}\sqrt{(K_x*X)^2+(K_y*X)^2+\epsilon}}.\end{equation}
+RGB is converted to grayscale using the mean channel value; depth is repeated over three channels before using the same routine. The agreement field is
+\begin{equation}C=\operatorname{clip}\left(1-|E(I)-E(D_0)|,0,1\right).\end{equation}
+This is a heuristic edge agreement score, not a calibrated prediction confidence.
+
+\subsection{Learnable LiDAR validity field}
+With $M=\mathbf 1[S>0]$, a Gaussian-initialized, trainable $31\times31$ convolution forms $U=K_\psi*M$. The code applies per-image min--max normalization and bilinear resizing:
+\begin{equation}L=\operatorname{Resize}\left(\operatorname{clip}\left(\frac{U-\min U}{\max(\max U-\min U,10^{-6})},0,1\right)\right).\end{equation}
+It encodes the locations of valid samples, not their numerical depth. Other code paths use exponential distance to a valid pixel (fixed field) or set the gate field to zero (no field), while PromptDA still consumes the metric depth prompt.
+
+\subsection{Gate and residual}
+The gating CNN takes $[C,L,D_0]$ and has one convolution--batch-normalization--ReLU block with 16 channels and a final single-channel convolution:
+\begin{equation}G=\operatorname{sigmoid}(g_\omega([C,L,D_0])).\end{equation}
+The residual CNN has three convolution--batch-normalization--ReLU blocks with 32 hidden channels plus a final single-channel convolution. It takes RGB, coarse depth and bilinearly resized frozen DPT features:
+\begin{equation}R=f_\phi([I,D_0,\widetilde F]),\qquad \boxed{\widehat D=D_0+G\odot R}.\end{equation}
+Only $\psi,\omega,\phi$ are optimized.
+
+\subsection{Selected no-boundary training objective}
+For valid pixels $\Omega=\{p:D^\star_p>0.01\,\mathrm m,\ D^\star_p\text{ finite}\}$, define
+\begin{equation}\mathcal L_{\mathrm{L1}}=\frac{1}{|\Omega|}\sum_{p\in\Omega}|\widehat D_p-D^\star_p|,\quad
+\mathcal L_{\mathrm{gate}}=\frac{1}{HW}\sum_p G_p\operatorname{stopgrad}(C_p).\end{equation}
+The selected objective is
+\begin{equation}\mathcal L(t)=\mathcal L_{\mathrm{L1}}+\mathbf1[t\ge5000]\,0.1\,\mathcal L_{\mathrm{gate}}.\end{equation}
+The earlier full method also used $0.5\mathcal L_{\mathrm{boundary}}$ where
+\begin{equation}\mathcal L_{\mathrm{boundary}}=\operatorname{mean}_{p\text{ over image}}\left[\exp(10E(I)_p)|\widehat D_p-D^\star_p|\mathbf1[p\in\Omega]\right].\end{equation}
+This additional term is disabled in our selected method. Removing a loss component is a model-selection decision rather than a standalone methodological novelty.
