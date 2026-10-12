@@ -1,0 +1,23 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,booktabs,graphicx,array,hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\title{\textbf{SACG: Spatially Adaptive Consistency Gating for Refinement of Frozen Prompt-Based Metric Depth Estimates}}
+\author{Author list to be finalized}
+\date{Working draft --- October 2026}
+\begin{document}
+\maketitle
+\begin{abstract}
+Prompt-conditioned metric depth estimators combine image priors with low-resolution range measurements but can retain local depth errors. We study SACG, a lightweight refinement module trained while Prompt Depth Anything (PromptDA) remains entirely frozen. SACG uses RGB--depth gradient agreement and a learned spatial field derived from the validity of LiDAR samples to predict a gate, which modulates a depth residual estimated from RGB, coarse depth and frozen DPT features. Our selected variant is trained with valid-pixel L1 and a delayed gate penalty, without the boundary-weighted term of an earlier version. On 5,599 ARKitScenes validation frames (one training seed), it reduces AbsRel from 0.011505 to 0.011298 and L1 from 0.013479 to 0.013227\,m. It narrowly outperforms a separately trained residual CNN on these two metrics, but not on RMSE, RGB-edge-based boundary error or SSIM. We report these observations with their limitations and identify the controlled additional experiments necessary to evaluate architectural advantage.
+\end{abstract}
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_method}
+\input{sections/04_experiments}
+\input{sections/05_results}
+\input{sections/06_discussion}
+\bibliographystyle{plain}
+\bibliography{references}
+\end{document}
