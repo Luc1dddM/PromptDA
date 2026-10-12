@@ -38,7 +38,7 @@ from dataset.dataset import collate_fn
 from dataset.sacg_data import add_dataset_args, resolve_dataset_args, build_dataset
 from dataset import dataset_keys
 from dataset.experiment import save_manifest
-from promptda.sacg import PromptDASACG, SACGLoss
+from promptda.sacg import PromptDASACG, PromptDASimpleRefiner, SACGLoss
 from promptda.utils.logger import Log
 from training.metrics import aggregate_metrics, compute_depth_metrics
 from training.visualization import plot_sacg_comparison
@@ -73,6 +73,8 @@ def parse_args():
         help="Local PromptDA checkpoint path or HF repo id. Defaults to official PromptDA checkpoint for --encoder.",
     )
     p.add_argument("--resume", type=str, default=None)
+    p.add_argument("--refiner", choices=["sacg", "simple"], default="sacg")
+    p.add_argument("--simple_hidden_channels", type=int, default=56)
     p.add_argument("--learnable_lidar", type=str2bool, default=False)
     p.add_argument("--ablate_lidar", type=str2bool, default=False)
 
@@ -179,36 +181,44 @@ def assert_output_size(output: dict[str, torch.Tensor], target: torch.Tensor):
     pred = output["refined_depth"]
     if pred.shape[-2:] != target.shape[-2:]:
         raise RuntimeError(
-            f"SACG output shape {tuple(pred.shape[-2:])} does not match GT shape {tuple(target.shape[-2:])}. "
+            f"Refiner output shape {tuple(pred.shape[-2:])} does not match GT shape {tuple(target.shape[-2:])}. "
             "Dataset GT must be resized to PromptDA output/RGB size."
         )
 
 
-def freeze_check(model: PromptDASACG):
+def freeze_check(model: nn.Module, refiner_name: str):
     for name, param in model.promptda.named_parameters():
         if param.requires_grad:
             raise RuntimeError(f"PromptDA must be frozen, but '{name}' requires grad.")
     trainable = sum(p.numel() for p in model.sacg.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.sacg.parameters())
-    Log.info(f"SACG trainable params: {trainable:,} / {total:,}")
+    Log.info(f"{refiner_name} trainable params: {trainable:,} / {total:,}")
 
 
-def build_model(args, device: torch.device) -> PromptDASACG:
-    model = PromptDASACG.from_pretrained(
-        encoder=args.encoder,
-        promptda_ckpt=args.promptda_ckpt,
-        dpt_variant=args.dpt_variant,
-        sacg_ckpt=None,
-        learnable_lidar=args.learnable_lidar,
-        ablate_lidar=args.ablate_lidar,
-    ).to(device)
-    freeze_check(model)
+def build_model(args, device: torch.device) -> nn.Module:
+    if args.refiner == "simple":
+        model = PromptDASimpleRefiner.from_pretrained(
+            encoder=args.encoder,
+            promptda_ckpt=args.promptda_ckpt,
+            dpt_variant=args.dpt_variant,
+            hidden_channels=args.simple_hidden_channels,
+        ).to(device)
+    else:
+        model = PromptDASACG.from_pretrained(
+            encoder=args.encoder,
+            promptda_ckpt=args.promptda_ckpt,
+            dpt_variant=args.dpt_variant,
+            sacg_ckpt=None,
+            learnable_lidar=args.learnable_lidar,
+            ablate_lidar=args.ablate_lidar,
+        ).to(device)
+    freeze_check(model, args.refiner)
     return model
 
 
 def save_checkpoint(
     path: Path,
-    model: PromptDASACG,
+    model: nn.Module,
     optimizer: torch.optim.Optimizer | None,
     scheduler,
     step: int,
@@ -228,7 +238,7 @@ def save_checkpoint(
 
 def load_checkpoint(
     path: str,
-    model: PromptDASACG,
+    model: nn.Module,
     optimizer: torch.optim.Optimizer | None,
     scheduler,
     device: torch.device,
@@ -242,7 +252,7 @@ def load_checkpoint(
         scheduler.load_state_dict(checkpoint["scheduler"])
     step = int(checkpoint.get("step", checkpoint.get("global_step", 0)))
     best_l1 = float(checkpoint.get("best_l1", float("inf")))
-    Log.info(f"Loaded SACG checkpoint from {path} | step={step} | best L1={best_l1:.4f}")
+    Log.info(f"Loaded refinement checkpoint from {path} | step={step} | best L1={best_l1:.4f}")
     return step, best_l1
 
 
@@ -261,7 +271,7 @@ def compute_sacg_loss(loss_fn: SACGLoss, output: dict, target: torch.Tensor, ste
 
 
 @torch.no_grad()
-def eval_sacg(model: PromptDASACG, loader, loss_fn: SACGLoss, device: torch.device, step: int):
+def eval_sacg(model: nn.Module, loader, loss_fn: SACGLoss, device: torch.device, step: int):
     model.eval()
     losses = []
     metrics_list = []
@@ -287,7 +297,7 @@ def eval_sacg(model: PromptDASACG, loader, loss_fn: SACGLoss, device: torch.devi
 
 
 @torch.no_grad()
-def save_visuals(model: PromptDASACG, loader, device: torch.device, output_dir: Path, max_images: int):
+def save_visuals(model: nn.Module, loader, device: torch.device, output_dir: Path, max_images: int):
     output_dir.mkdir(parents=True, exist_ok=True)
     model.eval()
     saved = 0
@@ -344,6 +354,10 @@ def run_compare_inference(args, ckpt_dir: Path):
         args.encoder,
         "--dpt_variant",
         args.dpt_variant,
+        "--refiner",
+        args.refiner,
+        "--simple_hidden_channels",
+        str(args.simple_hidden_channels),
         "--sacg_ckpt",
         str(best_ckpt),
         "--batch_size",
@@ -372,15 +386,28 @@ def run_compare_inference(args, ckpt_dir: Path):
 
 def main():
     args = parse_args()
+    if args.refiner == "simple":
+        if args.learnable_lidar or args.ablate_lidar:
+            raise ValueError("--learnable_lidar and --ablate_lidar apply only to --refiner sacg")
+        if args.use_boundary_loss or args.gate_weight != 0.0:
+            raise ValueError(
+                "The simple baseline must use plain L1: pass --use_boundary_loss False --gate_weight 0.0"
+            )
     if args.dataset == "scannetpp" and args.run_name == "sacg":
         args.run_name = "scannetpp"
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt_dir = Path(args.checkpoint_dir) / (
-    f"{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}_sacg_"
-    f"{'no-lidar' if args.ablate_lidar else 'learnable' if args.learnable_lidar else ''}"
-)
+    if args.refiner == "simple":
+        checkpoint_name = f"{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}_simple"
+    else:
+        sacg_variant = (
+            "no-lidar" if args.ablate_lidar else "learnable" if args.learnable_lidar else "fixed-lidar"
+        )
+        checkpoint_name = (
+            f"{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}_sacg_{sacg_variant}"
+        )
+    ckpt_dir = Path(args.checkpoint_dir) / checkpoint_name
 
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     with open(ckpt_dir / "run_config.json", "w") as config_file:
@@ -388,6 +415,7 @@ def main():
 
     Log.info(f"Device      : {device}")
     Log.info(f"Run         : {args.run_name}")
+    Log.info(f"Refiner     : {args.refiner}")
     Log.info(f"Encoder     : {args.encoder}")
     Log.info(f"DPT variant : {args.dpt_variant}")
     Log.info(f"PromptDA    : {args.promptda_ckpt or 'official PromptDA default'}")
@@ -425,11 +453,11 @@ def main():
         wandb_run = wandb.init(
             project="ObjectPromptDA",
             entity="ObjectPromptDA",
-            name=f"{args.run_name}_{args.encoder}_{args.dpt_variant}_seed{args.seed}_sacg",
+            name=f"{args.run_name}_{args.encoder}_{args.dpt_variant}_seed{args.seed}_{args.refiner}",
             dir=str(ckpt_dir),
             mode=args.wandb_mode,
             config=vars(args),
-            tags=["sacg", args.encoder, args.dpt_variant, "promptda_frozen"],
+            tags=[args.refiner, args.encoder, args.dpt_variant, "promptda_frozen"],
         )
 
     if args.eval_only:
@@ -461,7 +489,7 @@ def main():
     duration = 0.0
     step = start_step + 1
 
-    Log.info("start SACG training")
+    Log.info(f"start {args.refiner} training")
     model.train()
     for batch in train_loader:
         if step > args.num_iter:
@@ -477,7 +505,7 @@ def main():
         assert_output_size(output, target)
         loss, loss_info = compute_sacg_loss(loss_fn, output, target, step)
         if torch.isnan(loss).any():
-            raise RuntimeError("NaN in SACG loss occurred. Aborting training.")
+            raise RuntimeError("NaN in refinement loss occurred. Aborting training.")
 
         optimizer.zero_grad()
         loss.backward()
@@ -548,7 +576,7 @@ def main():
                 f.write(json.dumps({
                     "step": step,
                     "val_loss": val_loss,
-                    "sacg": metrics,
+                    args.refiner: metrics,
                     "baseline": baseline_metrics,
                 }) + "\n")
 
@@ -579,7 +607,7 @@ def main():
         step += 1
 
     save_checkpoint(ckpt_dir / "latest.pth", model, optimizer, scheduler, step - 1, {}, best_l1)
-    Log.info(f"finished SACG training | best L1={best_l1:.4f}")
+    Log.info(f"finished {args.refiner} training | best L1={best_l1:.4f}")
     if tensorboard_process is not None:
         tensorboard_process.terminate()
     if wandb_run is not None:

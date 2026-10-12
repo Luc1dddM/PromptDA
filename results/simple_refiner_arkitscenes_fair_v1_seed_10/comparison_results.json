@@ -1,0 +1,68 @@
+{
+  "protocol": {
+    "config": {
+      "dataset": "arkitscenes",
+      "data_seed": 10,
+      "data_root": "/media/naeem/T7/ArKitScene/ARKitScenes-main/data/upsampling",
+      "image_height": 756,
+      "image_width": 1008,
+      "depth_scale": 1000.0,
+      "ignore_rgb_masks": false,
+      "split": "val",
+      "max_samples": null,
+      "num_workers": 4,
+      "seed": 10,
+      "encoder": "vitl",
+      "dpt_variant": "legacy",
+      "refiner": "simple",
+      "simple_hidden_channels": 56,
+      "baseline_ckpt": null,
+      "sacg_ckpt": "checkpoints/simple_refiner_arkitscenes_fair_v1_vitl_legacy_10_simple/best.pth",
+      "learnable_lidar": false,
+      "ablate_lidar": false,
+      "batch_size": 1,
+      "output_dir": "results/simple_refiner_arkitscenes_fair_v1_seed_10",
+      "save_visuals": true,
+      "save_predictions": false,
+      "num_visuals": 8
+    },
+    "frame_count": 5599,
+    "frame_sha256": "5b8a182fd4fba0dead6371b54d15c96974d7f5f853074b210b7c50ea3f3dd2b9",
+    "aggregation": "mean_per_image",
+    "depth_units": "metres",
+    "minimum_gt_depth": 0.01
+  },
+  "baseline": {
+    "AbsRel": 0.011504706764049133,
+    "BoundaryAbsRel": 0.02059790653197065,
+    "L1": 0.013479376430329648,
+    "RMSE": 0.0319495298367015,
+    "SSIM": 0.9924462279567493,
+    "delta0.5": 0.9927205677957786,
+    "delta1": 0.99729086003318,
+    "delta2": 0.9992707968184003,
+    "delta3": 0.9997620449936545
+  },
+  "simple_refiner": {
+    "AbsRel": 0.011320528230926108,
+    "BoundaryAbsRel": 0.020335160236850423,
+    "L1": 0.013256842506411787,
+    "RMSE": 0.03179311425142173,
+    "SSIM": 0.9922472450052354,
+    "delta0.5": 0.9927757598391855,
+    "delta1": 0.9972961343576023,
+    "delta2": 0.9992714651270964,
+    "delta3": 0.9997622775890972
+  },
+  "improvements_percent": {
+    "AbsRel": 1.6008958490708867,
+    "BoundaryAbsRel": 1.2755964648774625,
+    "L1": 1.6509202779226118,
+    "RMSE": 0.48957069829246597,
+    "SSIM": -0.020049746162930544,
+    "delta0.5": 0.005559675566464984,
+    "delta1": 0.0005288652068123734,
+    "delta2": 6.687963779198483e-05,
+    "delta3": 2.3265080078032613e-05
+  }
+}

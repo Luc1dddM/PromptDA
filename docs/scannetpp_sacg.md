@@ -149,5 +149,17 @@ receive identical RGB/LiDAR frames and evaluation masks; comparison checks that
 their frozen-backbone outputs agree. Checkpoints with missing required model
 weights now fail instead of silently leaving random parameters.
 
+The simple baseline is a parameter-matched residual CNN over RGB, frozen
+PromptDA depth, resized LiDAR depth, and the LiDAR-validity mask. It has no SACG
+gate, gradient-consistency input, learned LiDAR field, or DPT feature input, and
+uses plain valid-pixel L1. Train seed 26 on both datasets with:
+
+```bash
+bash scripts/run_simple_refiner_baseline.sh all
+```
+
+For final three-seed results, use
+`SEEDS="10 26 42" bash scripts/run_simple_refiner_baseline.sh all`.
+
 Validation of these changes: see `tests/test_experiment_fairness.py` and
 `tests/test_scannetpp.py`. Full pretrained GPU training is a separate experiment.

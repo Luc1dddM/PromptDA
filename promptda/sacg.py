@@ -275,6 +275,101 @@ class PromptDASACG(nn.Module):
         }
 
 
+class SimpleRefinementModule(nn.Module):
+    """Plain residual CNN baseline without SACG confidence mechanisms."""
+
+    def __init__(self, hidden_channels: int = 56):
+        super().__init__()
+        # RGB (3), frozen PromptDA depth (1), resized LiDAR depth (1),
+        # and resized LiDAR validity (1).
+        self.refine_net = nn.Sequential(
+            _conv_block(6, hidden_channels),
+            _conv_block(hidden_channels, hidden_channels),
+            _conv_block(hidden_channels, hidden_channels),
+            nn.Conv2d(hidden_channels, 1, kernel_size=3, stride=1, padding=1),
+        )
+        # Begin from the frozen PromptDA prediction instead of a random offset.
+        nn.init.zeros_(self.refine_net[-1].weight)
+        nn.init.zeros_(self.refine_net[-1].bias)
+
+    def forward(
+        self,
+        rgb: torch.Tensor,
+        sparse: torch.Tensor,
+        d_coarse: torch.Tensor,
+    ) -> dict[str, torch.Tensor | None]:
+        target_hw = d_coarse.shape[-2:]
+        sparse_valid = (sparse > 0).to(sparse.dtype)
+        sparse_resized = F.interpolate(sparse, size=target_hw, mode="nearest")
+        valid_resized = F.interpolate(sparse_valid, size=target_hw, mode="nearest")
+        inputs = torch.cat([rgb, d_coarse, sparse_resized, valid_resized], dim=1)
+        delta_depth = self.refine_net(inputs)
+        refined_depth = d_coarse + delta_depth
+        zeros = torch.zeros_like(d_coarse)
+        return {
+            "refined_depth": refined_depth,
+            "coarse_depth": d_coarse,
+            "gate_map": torch.ones_like(d_coarse),
+            "c_grad": zeros,
+            "f_lidar": valid_resized,
+            "delta_depth": delta_depth,
+            "edge_strength": zeros,
+            "dpt_feat": None,
+        }
+
+
+class PromptDASimpleRefiner(nn.Module):
+    """Frozen PromptDA followed by a parameter-matched plain residual CNN."""
+
+    def __init__(self, promptda: PromptDA, refiner: SimpleRefinementModule):
+        super().__init__()
+        self.promptda = promptda
+        # Keep the shared trainer/checkpoint interface used by PromptDASACG.
+        self.sacg = refiner
+        self._freeze_promptda()
+
+    def _freeze_promptda(self):
+        for parameter in self.promptda.parameters():
+            parameter.requires_grad = False
+        self.promptda.eval()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.promptda.eval()
+        return self
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        encoder: str = "vitl",
+        promptda_ckpt: Optional[str] = None,
+        dpt_variant: str = "legacy",
+        refiner_ckpt: Optional[str] = None,
+        hidden_channels: int = 56,
+    ) -> "PromptDASimpleRefiner":
+        promptda = PromptDA.from_pretrained(
+            pretrained_model_name_or_path=promptda_ckpt,
+            encoder=encoder,
+            use_mlf=False,
+            dpt_variant=dpt_variant,
+        )
+        model = cls(promptda=promptda, refiner=SimpleRefinementModule(hidden_channels))
+        if refiner_ckpt is not None:
+            model.load_refiner_checkpoint(refiner_ckpt)
+        return model
+
+    def load_refiner_checkpoint(self, ckpt_path: str):
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
+        self.sacg.load_state_dict(state_dict, strict=True)
+        Log.info(f"Loaded simple refinement checkpoint: {ckpt_path}")
+
+    def forward(self, rgb: torch.Tensor, sparse_depth: torch.Tensor) -> dict[str, torch.Tensor]:
+        with torch.no_grad():
+            d_coarse = self.promptda(rgb, sparse_depth)
+        return self.sacg(rgb=rgb, sparse=sparse_depth, d_coarse=d_coarse)
+
+
 class SACGLoss(nn.Module):
     def __init__(
         self,

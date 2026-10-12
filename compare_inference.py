@@ -25,7 +25,7 @@ from dataset.dataset import collate_fn
 from dataset.experiment import save_manifest
 from dataset.sacg_data import add_dataset_args, resolve_dataset_args, build_dataset
 from promptda.promptda import PromptDA
-from promptda.sacg import PromptDASACG
+from promptda.sacg import PromptDASACG, PromptDASimpleRefiner
 from promptda.utils.logger import Log
 from training.metrics import aggregate_metrics, compute_depth_metrics_per_image
 from training.visualization import plot_sacg_comparison
@@ -46,6 +46,8 @@ def parse_args():
         default="legacy",
         choices=["legacy", "skip_concat_1x1", "hybrid_ca_shallow_concat"],
     )
+    p.add_argument("--refiner", choices=["sacg", "simple"], default="sacg")
+    p.add_argument("--simple_hidden_channels", type=int, default=56)
     p.add_argument(
         "--baseline_ckpt",
         type=str,
@@ -145,7 +147,8 @@ def main():
     Log.info(f"Split         : {args.split}")
     Log.info(f"Encoder       : {args.encoder}")
     Log.info(f"Baseline ckpt : {args.baseline_ckpt or 'official PromptDA default'}")
-    Log.info(f"SACG ckpt     : {args.sacg_ckpt or 'None (random SACG refine head)'}")
+    Log.info(f"Refiner       : {args.refiner}")
+    Log.info(f"Refiner ckpt  : {args.sacg_ckpt or 'None (random refinement head)'}")
 
     loader = build_loader(args, device)
     manifest = save_manifest(loader.dataset, Path(args.output_dir) / "eval_manifest.json")
@@ -157,14 +160,25 @@ def main():
         dpt_variant=args.dpt_variant,
     ).to(device).eval()
 
-    sacg_model = PromptDASACG.from_pretrained(
-        encoder=args.encoder,
-        promptda_ckpt=args.baseline_ckpt,
-        dpt_variant=args.dpt_variant,
-        sacg_ckpt=args.sacg_ckpt,
-        learnable_lidar=args.learnable_lidar,
-        ablate_lidar=args.ablate_lidar,
-    ).to(device).eval()
+    if args.refiner == "simple":
+        if args.learnable_lidar or args.ablate_lidar:
+            raise ValueError("LiDAR SACG flags cannot be combined with --refiner simple")
+        sacg_model = PromptDASimpleRefiner.from_pretrained(
+            encoder=args.encoder,
+            promptda_ckpt=args.baseline_ckpt,
+            dpt_variant=args.dpt_variant,
+            refiner_ckpt=args.sacg_ckpt,
+            hidden_channels=args.simple_hidden_channels,
+        ).to(device).eval()
+    else:
+        sacg_model = PromptDASACG.from_pretrained(
+            encoder=args.encoder,
+            promptda_ckpt=args.baseline_ckpt,
+            dpt_variant=args.dpt_variant,
+            sacg_ckpt=args.sacg_ckpt,
+            learnable_lidar=args.learnable_lidar,
+            ablate_lidar=args.ablate_lidar,
+        ).to(device).eval()
 
     baseline_metrics = []
     sacg_metrics = []
@@ -205,9 +219,11 @@ def main():
                 save_visual(batch, baseline_depth, sacg_output, save_path)
                 saved_visuals += 1
 
+    method_name = "simple_refiner" if args.refiner == "simple" else "sacg"
     with open(Path(args.output_dir) / "per_frame_metrics.json", "w") as f:
-        json.dump([{"identifier": identifier, "baseline": baseline_result, "sacg": sacg_result}
-                   for identifier, baseline_result, sacg_result in
+        json.dump([{"identifier": identifier, "baseline": baseline_result,
+                    method_name: candidate_result}
+                   for identifier, baseline_result, candidate_result in
                    zip(manifest["identifiers"], baseline_metrics, sacg_metrics)], f, indent=2)
 
     baseline_agg = aggregate_metrics(baseline_metrics)
@@ -236,18 +252,19 @@ def main():
                      "frame_sha256": manifest["sha256"], "aggregation": "mean_per_image",
                      "depth_units": "metres", "minimum_gt_depth": 0.01},
         "baseline": baseline_agg,
-        "sacg": sacg_agg,
+        method_name: sacg_agg,
         "improvements_percent": improvements,
     }
 
     Log.info("=" * 88)
-    Log.info("PromptDA Baseline vs SACG")
+    display_name = "SimpleRefiner" if args.refiner == "simple" else "SACG"
+    Log.info(f"PromptDA Baseline vs {display_name}")
     Log.info("=" * 88)
-    Log.info(f"{'Metric':<18} {'Baseline':<18} {'SACG':<18} {'Improvement':<18}")
+    Log.info(f"{'Metric':<18} {'Baseline':<18} {display_name:<18} {'Improvement':<18}")
     Log.info("-" * 88)
     for key in sorted(results["baseline"].keys()):
         base_val = results["baseline"][key]
-        sacg_val = results["sacg"].get(key, float("nan"))
+        sacg_val = results[method_name].get(key, float("nan"))
         imp = results["improvements_percent"].get(key, float("nan"))
         if np.isnan(imp):
             imp_str = "nan"
@@ -264,13 +281,13 @@ def main():
 
     txt_path = os.path.join(args.output_dir, "comparison_results.txt")
     with open(txt_path, "w") as f:
-        f.write("PromptDA Baseline vs SACG\n")
+        f.write(f"PromptDA Baseline vs {display_name}\n")
         f.write("=" * 88 + "\n")
-        f.write(f"{'Metric':<18} {'Baseline':<18} {'SACG':<18} {'Improvement':<18}\n")
+        f.write(f"{'Metric':<18} {'Baseline':<18} {display_name:<18} {'Improvement':<18}\n")
         f.write("-" * 88 + "\n")
         for key in sorted(results["baseline"].keys()):
             base_val = results["baseline"][key]
-            sacg_val = results["sacg"].get(key, float("nan"))
+            sacg_val = results[method_name].get(key, float("nan"))
             imp = results["improvements_percent"].get(key, float("nan"))
             if np.isnan(imp):
                 imp_str = "nan"

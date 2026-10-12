@@ -1,0 +1,66 @@
+{
+  "protocol": {
+    "config": {
+      "dataset": "arkitscenes",
+      "data_seed": 10,
+      "data_root": "/media/naeem/T7/ArKitScene/ARKitScenes-main/data/upsampling",
+      "image_height": 756,
+      "image_width": 1008,
+      "depth_scale": 1000.0,
+      "ignore_rgb_masks": false,
+      "split": "val",
+      "max_samples": null,
+      "num_workers": 4,
+      "seed": 10,
+      "encoder": "vitl",
+      "dpt_variant": "legacy",
+      "baseline_ckpt": null,
+      "sacg_ckpt": "checkpoints/arkit_sacg_all_fair_v1_vitl_legacy_10_sacg_learnable/best.pth",
+      "learnable_lidar": true,
+      "ablate_lidar": false,
+      "batch_size": 1,
+      "output_dir": "results/arkit_sacg_all_fair_v1_seed_10_learnable",
+      "save_visuals": true,
+      "save_predictions": false,
+      "num_visuals": 8
+    },
+    "frame_count": 5599,
+    "frame_sha256": "5b8a182fd4fba0dead6371b54d15c96974d7f5f853074b210b7c50ea3f3dd2b9",
+    "aggregation": "mean_per_image",
+    "depth_units": "metres",
+    "minimum_gt_depth": 0.01
+  },
+  "baseline": {
+    "AbsRel": 0.011504706764049133,
+    "BoundaryAbsRel": 0.02059790653197065,
+    "L1": 0.013479376430329648,
+    "RMSE": 0.0319495298367015,
+    "SSIM": 0.9924462279567493,
+    "delta0.5": 0.9927205677957786,
+    "delta1": 0.99729086003318,
+    "delta2": 0.9992707968184003,
+    "delta3": 0.9997620449936545
+  },
+  "sacg": {
+    "AbsRel": 0.011358197790897077,
+    "BoundaryAbsRel": 0.020446258824334283,
+    "L1": 0.013304598291061391,
+    "RMSE": 0.03184570847532011,
+    "SSIM": 0.9921468507017531,
+    "delta0.5": 0.9927237396166567,
+    "delta1": 0.9972925641362551,
+    "delta2": 0.9992727219451643,
+    "delta3": 0.9997628937344143
+  },
+  "improvements_percent": {
+    "AbsRel": 1.2734687533540903,
+    "BoundaryAbsRel": 0.7362283821326804,
+    "L1": 1.2966327523261216,
+    "RMSE": 0.32495416807889055,
+    "SSIM": -0.030165589182194794,
+    "delta0.5": 0.00031950792087033345,
+    "delta1": 0.00017087322528467345,
+    "delta2": 0.00019265315776925064,
+    "delta3": 8.489427614753492e-05
+  }
+}
