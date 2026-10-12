@@ -99,3 +99,8 @@ If you find this code useful for your research, please use the following BibTeX 
   year={2024}
 }
 ```
+
+### SACG training and inference on ScanNet++
+
+Use `--dataset scannetpp` with `training/train_sacg.py` and `compare_inference.py`.
+See [data layout, training commands, and inference outputs](docs/scannetpp_sacg.md).

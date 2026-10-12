@@ -174,10 +174,10 @@ class PromptDA(nn.Module):
         missing, unexpected = self.load_state_dict(state_dict, strict=False)
 
         mlf_missing      = [k for k in missing if k.startswith('mlf')]
-        critical_missing = [k for k in missing if not k.startswith('mlf')]
+        critical_missing = [k for k in missing if not k.startswith('mlf') and k not in {'_mean', '_std'}]
 
         if critical_missing:
-            Log.warn(f'Missing keys (unexpected): {critical_missing}')
+            raise RuntimeError(f'Incomplete PromptDA checkpoint: {critical_missing}')
         if unexpected:
             Log.warn(f'Unexpected keys: {unexpected}')
         Log.info(f'MLF keys random init (expected): {len(mlf_missing)}')
@@ -253,7 +253,11 @@ class PromptDA(nn.Module):
         max_val = torch.quantile(
             prompt_depth.reshape(B, -1), 1., dim=1, keepdim=True
         )[:, :, None, None]
-        prompt_depth = (prompt_depth - min_val) / (max_val - min_val)
+        if not torch.isfinite(prompt_depth).all():
+            raise ValueError("LiDAR prompt must contain only finite values")
+        if (max_val <= 0).any():
+            raise ValueError("Each LiDAR prompt must contain a positive depth")
+        prompt_depth = (prompt_depth - min_val) / (max_val - min_val).clamp_min(1e-6)
         return prompt_depth, min_val, max_val
 
     def denormalize(self, depth, min_val, max_val):

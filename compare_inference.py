@@ -21,17 +21,19 @@ sys.modules.setdefault("dataset_keys", arkit_dataset_keys)
 sys.modules.setdefault("image_utils", arkit_image_utils)
 
 from data.ARKitScenes.depth_upsampling import transfroms
-from dataset.dataset import MyARKitScenesDataset, collate_fn
+from dataset.dataset import collate_fn
+from dataset.experiment import save_manifest
+from dataset.sacg_data import add_dataset_args, resolve_dataset_args, build_dataset
 from promptda.promptda import PromptDA
 from promptda.sacg import PromptDASACG
 from promptda.utils.logger import Log
-from training.metrics import aggregate_metrics, compute_depth_metrics
+from training.metrics import aggregate_metrics, compute_depth_metrics_per_image
 from training.visualization import plot_sacg_comparison
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Compare official PromptDA baseline against SACG refinement")
-    p.add_argument("--data_root", type=str, default="data/ARKitScenes/data/upsampling")
+    add_dataset_args(p)
     p.add_argument("--split", type=str, default="val", choices=["train", "val"])
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--num_workers", type=int, default=4)
@@ -62,8 +64,9 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--output_dir", type=str, default="results/sacg_compare")
     p.add_argument("--save_visuals", action="store_true")
+    p.add_argument("--save_predictions", action="store_true", help="Save per-frame depth in metres as .npy")
     p.add_argument("--num_visuals", type=int, default=8)
-    return p.parse_args()
+    return resolve_dataset_args(p.parse_args())
 
 
 def build_transforms(split: str):
@@ -79,12 +82,11 @@ def build_transforms(split: str):
 
 
 def build_loader(args, device: torch.device) -> DataLoader:
-    dataset = MyARKitScenesDataset(
-        root=args.data_root,
+    dataset = build_dataset(
+        args,
         split=args.split,
         max_samples=args.max_samples,
-        seed=args.seed,
-        transform=build_transforms(args.split),
+        transform=build_transforms("val"),
     )
     return DataLoader(
         dataset,
@@ -132,8 +134,6 @@ def save_visual(
 
 def main():
     args = parse_args()
-    lidar_tag = "no_lidar" if args.ablate_lidar else "with_lidar"
-    args.output_dir = os.path.join(args.output_dir, lidar_tag)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(args.output_dir, exist_ok=True)
     visuals_dir = os.path.join(args.output_dir, "visualizations")
@@ -148,6 +148,7 @@ def main():
     Log.info(f"SACG ckpt     : {args.sacg_ckpt or 'None (random SACG refine head)'}")
 
     loader = build_loader(args, device)
+    manifest = save_manifest(loader.dataset, Path(args.output_dir) / "eval_manifest.json")
 
     baseline = PromptDA.from_pretrained(
         pretrained_model_name_or_path=args.baseline_ckpt,
@@ -179,13 +180,24 @@ def main():
 
             baseline_depth = baseline(image, prompt)
             sacg_output = sacg_model(image, prompt)
+            torch.testing.assert_close(baseline_depth, sacg_output["coarse_depth"],
+                                       msg="Baseline and SACG backbone predictions differ")
             assert_prediction_size(baseline_depth, depth_gt.shape[-2:], "baseline_depth")
             assert_prediction_size(sacg_output["refined_depth"], depth_gt.shape[-2:], "refined_depth")
 
-            baseline_metrics.append(compute_depth_metrics(baseline_depth, depth_gt, rgb=image))
-            sacg_metrics.append(
-                compute_depth_metrics(sacg_output["refined_depth"], depth_gt, rgb=image)
-            )
+            if args.save_predictions:
+                for i, identifier in enumerate(identifiers):
+                    destination = Path(args.output_dir) / "predictions" / identifier
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    np.save(str(destination) + "_sacg.npy", sacg_output["refined_depth"][i, 0].cpu().numpy())
+                    np.save(str(destination) + "_baseline.npy", baseline_depth[i, 0].cpu().numpy())
+
+            baseline_metrics.extend(compute_depth_metrics_per_image(
+                baseline_depth, depth_gt, rgb=image,
+                valid_mask=batch.get(arkit_dataset_keys.VALID_MASK_IMG)))
+            sacg_metrics.extend(compute_depth_metrics_per_image(
+                sacg_output["refined_depth"], depth_gt, rgb=image,
+                valid_mask=batch.get(arkit_dataset_keys.VALID_MASK_IMG)))
 
             if args.save_visuals and saved_visuals < args.num_visuals:
                 identifier = identifiers[0] if identifiers else f"{batch_idx:04d}"
@@ -193,12 +205,17 @@ def main():
                 save_visual(batch, baseline_depth, sacg_output, save_path)
                 saved_visuals += 1
 
+    with open(Path(args.output_dir) / "per_frame_metrics.json", "w") as f:
+        json.dump([{"identifier": identifier, "baseline": baseline_result, "sacg": sacg_result}
+                   for identifier, baseline_result, sacg_result in
+                   zip(manifest["identifiers"], baseline_metrics, sacg_metrics)], f, indent=2)
+
     baseline_agg = aggregate_metrics(baseline_metrics)
     sacg_agg = aggregate_metrics(sacg_metrics)
 
     improvements = {}
     lower_is_better = {"L1", "RMSE", "AbsRel", "BoundaryAbsRel"}
-    higher_is_better = {"delta1", "delta2", "delta3", "SSIM"}
+    higher_is_better = {"delta0.5", "delta1", "delta2", "delta3", "SSIM"}
     for key in sorted(set(baseline_agg.keys()) | set(sacg_agg.keys())):
         if key not in baseline_agg or key not in sacg_agg:
             continue
@@ -215,6 +232,9 @@ def main():
             improvements[key] = sacg_val - base_val
 
     results = {
+        "protocol": {"config": vars(args), "frame_count": manifest["frame_count"],
+                     "frame_sha256": manifest["sha256"], "aggregation": "mean_per_image",
+                     "depth_units": "metres", "minimum_gt_depth": 0.01},
         "baseline": baseline_agg,
         "sacg": sacg_agg,
         "improvements_percent": improvements,

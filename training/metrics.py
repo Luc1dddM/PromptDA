@@ -1,18 +1,9 @@
 import math
-import sys
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from skimage.metrics import structural_similarity as compute_ssim
-
-from data.ARKitScenes.depth_upsampling import dataset_keys as arkit_dataset_keys
-
-sys.modules.setdefault("dataset_keys", arkit_dataset_keys)
-
-from data.ARKitScenes.depth_upsampling.losses.l1_loss import l1_loss
-from data.ARKitScenes.depth_upsampling.losses.rmse import rmse_loss
-
 
 EPS = 1e-6
 
@@ -96,25 +87,28 @@ def compute_depth_metrics(
     edge_threshold: float = 0.1,
     edge_dilate_kernel: int = 5,
     eps: float = EPS,
+    valid_mask: torch.Tensor | None = None,
 ) -> dict:
-    valid_mask = (gt > 0) & torch.isfinite(gt) & torch.isfinite(pred)
-
-    inputs = {
-        arkit_dataset_keys.HIGH_RES_DEPTH_IMG: gt,
-        arkit_dataset_keys.VALID_MASK_IMG: valid_mask,
-    }
-    outputs = {
-        arkit_dataset_keys.PREDICTION_DEPTH_IMG: pred,
-    }
-
-    l1_value = l1_loss(outputs, inputs).item()
-    rmse_value = rmse_loss(outputs, inputs).item()
+    if pred.shape != gt.shape:
+        raise ValueError("Prediction and GT shapes must match")
+    if pred.shape[0] != 1:
+        return aggregate_metrics(compute_depth_metrics_per_image(
+            pred, gt, rgb, valid_mask=valid_mask, edge_threshold=edge_threshold,
+            edge_dilate_kernel=edge_dilate_kernel, eps=eps))
+    valid_mask = ((gt > 0.01) & torch.isfinite(gt)) if valid_mask is None else (
+        valid_mask.bool() & (gt > 0.01) & torch.isfinite(gt))
+    if not torch.isfinite(pred[valid_mask]).all():
+        raise ValueError("Non-finite prediction at a valid GT pixel")
+    error = pred[valid_mask] - gt[valid_mask]
+    l1_value = error.abs().mean().item()
+    rmse_value = error.square().mean().sqrt().item()
 
     if not valid_mask.any():
         metrics = {
             "L1": l1_value,
             "RMSE": rmse_value,
             "AbsRel": float("nan"),
+            "delta0.5": float("nan"),
             "delta1": float("nan"),
             "delta2": float("nan"),
             "delta3": float("nan"),
@@ -124,24 +118,25 @@ def compute_depth_metrics(
             metrics["BoundaryAbsRel"] = float("nan")
         return metrics
 
-    pred_valid = pred[valid_mask].clamp_min(eps)
+    pred_valid = pred[valid_mask]
     gt_valid = gt[valid_mask].clamp_min(eps)
-    ratio = torch.maximum(pred_valid / gt_valid, gt_valid / pred_valid)
+    ratio = torch.maximum(pred_valid / gt_valid, gt_valid / pred_valid.clamp_min(eps))
 
     metrics = {
         "L1": l1_value,
         "RMSE": rmse_value,
         "AbsRel": torch.mean(torch.abs(pred_valid - gt_valid) / gt_valid).item(),
+        "delta0.5": torch.mean((ratio < 1.25 ** 0.5).float()).item(),
         "delta1": torch.mean((ratio < 1.25).float()).item(),
         "delta2": torch.mean((ratio < 1.25 ** 2).float()).item(),
         "delta3": torch.mean((ratio < 1.25 ** 3).float()).item(),
-        "SSIM": compute_ssim_metric(pred, gt),
+        "SSIM": compute_ssim_metric(pred, torch.where(valid_mask, gt, 0)),
     }
 
     if rgb is not None:
         metrics["BoundaryAbsRel"] = compute_boundary_absrel(
             pred,
-            gt,
+            torch.where(valid_mask, gt, 0),
             rgb,
             edge_threshold=edge_threshold,
             edge_dilate_kernel=edge_dilate_kernel,
@@ -149,6 +144,14 @@ def compute_depth_metrics(
         )
 
     return metrics
+
+
+def compute_depth_metrics_per_image(pred, gt, rgb=None, valid_mask=None, **kwargs):
+    """One record per frame; aggregate these records, never batch averages."""
+    return [compute_depth_metrics(
+        pred[i:i+1], gt[i:i+1], None if rgb is None else rgb[i:i+1],
+        valid_mask=None if valid_mask is None else valid_mask[i:i+1], **kwargs)
+        for i in range(pred.shape[0])]
 
 
 def aggregate_metrics(metrics_list: list[dict]) -> dict:
@@ -176,9 +179,9 @@ def compute_ssim_metric(pred: torch.Tensor, gt: torch.Tensor) -> float:
     valid_mask = (gt > 0) & torch.isfinite(gt) & torch.isfinite(pred)
     ssim_vals = []
     for b in range(pred.shape[0]):
-        p = pred[b, 0].cpu().numpy()
-        t = gt[b, 0].cpu().numpy()
-        v = valid_mask[b, 0].cpu().numpy()
+        p = pred[b, 0].cpu().numpy().copy()
+        t = gt[b, 0].cpu().numpy().copy()
+        v = valid_mask[b, 0].cpu().numpy().copy()
         if not v.any() or p.shape[0] < 7 or p.shape[1] < 7:
             ssim_vals.append(float("nan"))
             continue

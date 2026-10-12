@@ -73,7 +73,7 @@ class ARKitScenesDataset(Dataset):
         self.meta_data = self.meta_data[self.meta_data['fold'] == self.split_folder]
         for video_id, sky_direction in zip(self.meta_data['video_id'], self.meta_data['sky_direction']):
             video_folder = os.path.join(self.dataset_folder, str(video_id))
-            color_files = glob(os.path.join(video_folder, WIDE, '*.png'))
+            color_files = sorted(glob(os.path.join(video_folder, WIDE, '*.png')))
             self.samples.extend([[str(video_id), str(os.path.basename(file)), sky_direction]
                                  for file in color_files])
             

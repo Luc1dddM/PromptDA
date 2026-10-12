@@ -14,27 +14,35 @@ TARGET_H, TARGET_W = 756, 1008
 
 class MyARKitScenesDataset(ARKitScenesDataset):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, target_hw=(756, 1008), **kwargs):
+        self.target_hw = tuple(target_hw)
         super().__init__(*args, **kwargs)
 
     # ── Image loading ─────────────────────────────────────────────────────
 
     def load_image(self, path, shape, is_depth, sky_direction, target_hw=None):
         img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f"Cannot read image: {path}")
+        native_hw = img.shape[:2]
         img = ARKitScenesDataset.rotate_image(img, sky_direction)
 
         if is_depth:
             img = np.asarray(img / MILLIMETER_TO_METER, np.float32)
-            if target_hw is not None:
+            if target_hw is None:
+                # Rotation may swap axes. Restore the native grid dimensions to
+                # match the fixed landscape RGB/GT warp and allow mixed batches.
+                target_hw = native_hw
+            if img.shape[:2] != tuple(target_hw):
                 # INTER_NEAREST preserves real depth values — never interpolate depth
                 img = cv2.resize(img, (target_hw[1], target_hw[0]),
                                 interpolation=cv2.INTER_NEAREST)
             img = expand_channel_dim(img)
         else:
-            img = img / 255.0
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) / 255.0
             h, w = img.shape[:2]
-            if (h, w) != (TARGET_H, TARGET_W):
-                img = cv2.resize(img, (TARGET_W, TARGET_H),
+            if (h, w) != self.target_hw:
+                img = cv2.resize(img, self.target_hw[::-1],
                                 interpolation=cv2.INTER_AREA)
 
             img = image_hwc_to_chw(np.asarray(img, np.float32))
@@ -93,7 +101,7 @@ class MyARKitScenesDataset(ARKitScenesDataset):
 
     def __getitem__(self, index: int):
         video_id, sample_id, direction = self.samples[index]
-        sample = {dataset_keys.IDENTIFIER: str(sample_id)}
+        sample = {dataset_keys.IDENTIFIER: f"{video_id}/{sample_id}"}
 
         rgb_file   = os.path.join(self.dataset_folder, video_id, WIDE, sample_id)
         depth_file = os.path.join(self.dataset_folder, video_id, 'highres_depth', sample_id)
@@ -103,20 +111,20 @@ class MyARKitScenesDataset(ARKitScenesDataset):
             sample_id.replace('.png', '.json')
         )
 
-        TARGET_HW = (756, 1008)
+        TARGET_HW = self.target_hw
 
         # Load RGB first — fixed size
         color_img = self.load_image(rgb_file, self.high_res, False, direction)
         _, img_h, img_w = color_img.shape  # will be (3, 756, 1008)
 
         # GT follows the PromptDA output/RGB size. The native low-res prompt is
-        # kept unchanged, matching the official PromptDA inference path.
+        # kept at its native grid resolution (orientation follows RGB/GT).
         sample[dataset_keys.COLOR_IMG]          = color_img
         sample[dataset_keys.HIGH_RES_DEPTH_IMG] = self.load_image(
             depth_file, self.high_res, True, direction, target_hw=TARGET_HW
         )
         sample[dataset_keys.LOW_RES_DEPTH_IMG]  = self.load_image(
-            apple_file, self.low_res, True, direction, target_hw=self.low_res
+            apple_file, self.low_res, True, direction, target_hw=None
         )
 
         # # Boxes: derived from fixed RGB size, no change needed

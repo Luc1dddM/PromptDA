@@ -34,8 +34,10 @@ sys.modules.setdefault("image_utils", arkit_image_utils)
 
 from data.ARKitScenes.depth_upsampling import transfroms
 from data.ARKitScenes.depth_upsampling.sampler import MultiEpochSampler
-from dataset.dataset import MyARKitScenesDataset, collate_fn
+from dataset.dataset import collate_fn
+from dataset.sacg_data import add_dataset_args, resolve_dataset_args, build_dataset
 from dataset import dataset_keys
+from dataset.experiment import save_manifest
 from promptda.sacg import PromptDASACG, SACGLoss
 from promptda.utils.logger import Log
 from training.metrics import aggregate_metrics, compute_depth_metrics
@@ -52,7 +54,7 @@ def str2bool(value: str | bool) -> bool:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Train SACG refinement on top of frozen official PromptDA")
-    p.add_argument("--data_root", type=str, default="data/ARKitScenes/data/upsampling")
+    add_dataset_args(p)
     p.add_argument("--max_samples", type=int, default=None)
     p.add_argument("--max_val_samples", type=int, default=None)
     p.add_argument("--num_workers", type=int, default=4)
@@ -98,9 +100,9 @@ def parse_args():
     p.add_argument("--wandb_mode", type=str, default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--log_dir", type=str, default="log")
     p.add_argument("--tbp", type=int, default=None)
-    p.add_argument("--compare_after_train", type=str2bool, default=True)
-    p.add_argument("--compare_save_visuals", type=str2bool, default=True)
-    return p.parse_args()
+    p.add_argument("--compare_after_train", type=str2bool, default=False)
+    p.add_argument("--compare_save_visuals", type=str2bool, default=False)
+    return resolve_dataset_args(p.parse_args())
 
 
 def set_seed(seed: int):
@@ -127,11 +129,10 @@ def build_transforms(split: str):
 
 
 def build_train_loader(args, start_itr: int):
-    ds = MyARKitScenesDataset(
-        root=args.data_root,
+    ds = build_dataset(
+        args,
         split="train",
         max_samples=args.max_samples,
-        seed=args.seed,
         transform=build_transforms("train"),
     )
     sampler = MultiEpochSampler(ds, args.num_iter, start_itr, args.batch_size)
@@ -149,11 +150,10 @@ def build_train_loader(args, start_itr: int):
 
 
 def build_val_loader(args):
-    ds = MyARKitScenesDataset(
-        root=args.data_root,
+    ds = build_dataset(
+        args,
         split="val",
         max_samples=args.max_val_samples,
-        seed=args.seed,
         transform=build_transforms("val"),
     )
     loader = DataLoader(
@@ -235,7 +235,7 @@ def load_checkpoint(
 ) -> tuple[int, float]:
     checkpoint = torch.load(path, map_location=device)
     state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
-    model.sacg.load_state_dict(state_dict, strict=False)
+    model.sacg.load_state_dict(state_dict, strict=True)
     if optimizer is not None and checkpoint.get("optimizer") is not None:
         optimizer.load_state_dict(checkpoint["optimizer"])
     if scheduler is not None and checkpoint.get("scheduler") is not None:
@@ -247,7 +247,7 @@ def load_checkpoint(
 
 
 def compute_sacg_loss(loss_fn: SACGLoss, output: dict, target: torch.Tensor, step: int):
-    valid_mask = target > 0
+    valid_mask = torch.isfinite(target) & (target > 0.01)
     return loss_fn(
         refined_depth=output["refined_depth"],
         coarse_depth=output["coarse_depth"],
@@ -275,8 +275,10 @@ def eval_sacg(model: PromptDASACG, loader, loss_fn: SACGLoss, device: torch.devi
         assert_output_size(output, target)
         loss, _ = compute_sacg_loss(loss_fn, output, target, step)
         losses.append(float(loss.item()))
-        metrics_list.append(compute_depth_metrics(output["refined_depth"], target, rgb=image))
-        baseline_metrics_list.append(compute_depth_metrics(output["coarse_depth"], target, rgb=image))
+        metrics_list.append(compute_depth_metrics(output["refined_depth"], target, rgb=image,
+                                                   valid_mask=batch.get(dataset_keys.VALID_MASK_IMG)))
+        baseline_metrics_list.append(compute_depth_metrics(output["coarse_depth"], target, rgb=image,
+                                                            valid_mask=batch.get(dataset_keys.VALID_MASK_IMG)))
     return (
         sum(losses) / len(losses),
         aggregate_metrics(metrics_list),
@@ -326,6 +328,12 @@ def run_compare_inference(args, ckpt_dir: Path):
     command = [
         sys.executable,
         str(compare_script),
+        "--dataset", args.dataset,
+        "--image_height", str(args.image_height),
+        "--image_width", str(args.image_width),
+        "--depth_scale", str(args.depth_scale),
+        "--seed", str(args.seed),
+        "--data_seed", str(args.data_seed),
         "--data_root",
         args.data_root,
         "--split",
@@ -345,6 +353,8 @@ def run_compare_inference(args, ckpt_dir: Path):
         "--num_visuals",
         str(args.num_visuals),
     ]
+    if args.ignore_rgb_masks:
+        command.append("--ignore_rgb_masks")
     if args.promptda_ckpt is not None:
         command.extend(["--baseline_ckpt", args.promptda_ckpt])
     if args.max_val_samples is not None:
@@ -362,11 +372,19 @@ def run_compare_inference(args, ckpt_dir: Path):
 
 def main():
     args = parse_args()
+    if args.dataset == "scannetpp" and args.run_name == "sacg":
+        args.run_name = "scannetpp"
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt_dir = Path(args.checkpoint_dir) / f"{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}_sacg"
+    ckpt_dir = Path(args.checkpoint_dir) / (
+    f"{args.run_name}_{args.encoder}_{args.dpt_variant}_{args.seed}_sacg_"
+    f"{'no-lidar' if args.ablate_lidar else 'learnable' if args.learnable_lidar else ''}"
+)
+
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+    with open(ckpt_dir / "run_config.json", "w") as config_file:
+        json.dump(vars(args), config_file, indent=2)
 
     Log.info(f"Device      : {device}")
     Log.info(f"Run         : {args.run_name}")
@@ -376,6 +394,7 @@ def main():
     Log.info(f"Eval only   : {args.eval_only}")
 
     val_loader = build_val_loader(args)
+    save_manifest(val_loader.dataset, ckpt_dir / "val_manifest.json")
     model = build_model(args, device)
     loss_fn = SACGLoss(
         boundary_weight=args.boundary_weight,
@@ -435,6 +454,7 @@ def main():
         val_writer = None
 
     train_loader = build_train_loader(args, start_step)
+    save_manifest(train_loader.dataset, ckpt_dir / "train_manifest.json")
     recent_losses = []
     recent_info = {"L_main": [], "L_boundary": [], "L_gate": []}
     start_time = time.time()
@@ -502,7 +522,7 @@ def main():
                 })
             duration = 0.0
 
-        if step % args.eval_freq == 0:
+        if step % args.eval_freq == 0 or step == args.num_iter:
             val_loss, metrics, baseline_metrics = eval_sacg(model, val_loader, loss_fn, device, step)
             Log.info(
                 f"[EVAL step={step}] val_loss={val_loss:.4f} | "
@@ -541,6 +561,7 @@ def main():
         if step % args.visual_freq == 0:
             saved = save_visuals(model, val_loader, device, ckpt_dir / f"visualizations_step-{step}", args.num_visuals)
             Log.info(f"Saved {saved} visualization(s) for step {step}")
+            model.train()
 
         if step % args.save_freq == 0:
             save_checkpoint(

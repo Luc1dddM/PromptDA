@@ -196,6 +196,11 @@ class PromptDASACG(nn.Module):
             p.requires_grad = False
         self.promptda.eval()
 
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.promptda.eval()
+        return self
+
     def _register_feature_hook(self, module_path: str):
         module = self.promptda.depth_head
         for part in module_path.split("."):
@@ -241,7 +246,7 @@ class PromptDASACG(nn.Module):
             state_dict = {key[len("sacg."):]: value for key, value in state_dict.items()}
         elif all(key.startswith("module.sacg.") for key in state_dict.keys()):
             state_dict = {key[len("module.sacg."):]: value for key, value in state_dict.items()}
-        missing, unexpected = self.sacg.load_state_dict(state_dict, strict=False)
+        missing, unexpected = self.sacg.load_state_dict(state_dict, strict=True)
         if missing:
             Log.warn(f"SACG missing keys: {missing}")
         if unexpected:
