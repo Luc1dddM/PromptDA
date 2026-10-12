@@ -1,0 +1,10 @@
+\section{Introduction}
+Dense metric depth is central to robotics and scene understanding. RGB alone cannot resolve scale, while mobile range sensors supply low-resolution or sparse depth. Image-guided depth completion combines these signals \cite{ma2018sparse,park2020nlspn}.
+
+Pretrained visual representations, including DINOv2 \cite{oquab2024dinov2} and Depth Anything \cite{yang2024depthanything}, enable capable dense depth predictors. PromptDA \cite{lin2025promptda} accepts metric depth prompts and provides accurate dense estimates. Yet downstream images retain localized residual errors. We investigate a small learnable postprocessing module that improves these predictions while keeping PromptDA completely frozen.
+
+Our spatially adaptive consistency gating (SACG) module predicts a residual from RGB, coarse depth and frozen DPT decoder features, then modulates it using a learned gate. The gate uses RGB--depth gradient agreement and a spatial field derived from the validity pattern of the low-resolution LiDAR measurements. The refinement CNN itself does not ingest raw LiDAR depth values.
+
+In the available ARKitScenes seed-10 ablation, the model trained without the optional boundary-weighted loss slightly outperforms both frozen PromptDA and a separately trained simple residual CNN on L1 and AbsRel. We therefore select it as the working method, but do not infer a general architectural advantage from this single-seed comparison.
+
+Contributions of this working manuscript are (1) a code-grounded specification of frozen-PromptDA residual refinement with a consistency-conditioned spatial gate, (2) a transparent comparison to an independently trained plain CNN and component ablations, and (3) a measured report of metric-specific improvements and limitations. Claims about zero-shot generalization, calibrated confidence and state-of-the-art accuracy are out of scope.
