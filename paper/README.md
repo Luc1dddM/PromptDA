@@ -1,18 +1,17 @@
-# SACG working research paper
+# SACG journal manuscript (IEEE Access target)
 
-This LaTeX manuscript was written against the code and committed evaluation outputs on branch Lamns_V4_SACG. Working method: SACG with a learned LiDAR-validity field and a gate regularizer, **without** the optional boundary-weighted loss.
+This repository contains a revised and expanded LaTeX manuscript. IEEE Access is a tentative journal target. The current main.tex still uses a generic two-column article class: it is NOT the official IEEE Access submission template.
 
-The manuscript is a research draft, not a submission-ready paper. It does not claim new experiments, state of the art, calibrated uncertainty, PromptDA fine-tuning, or generalization of the selected variant to ScanNet++.
+To compile from the paper directory:
 
-Contents:
-- main.tex: entrypoint, title and abstract.
-- sections/: Introduction, Related Work, Method, Experiments, Results, Discussion.
-- references.bib: verified academic references.
-- SOURCE_MAP.md: code and result provenance.
-- EXPERIMENTS_TODO.md: outstanding evidence before submission.
+    latexmk -pdf -interaction=nonstopmode -file-line-error main.tex
 
-Compile from this directory with pdflatex main.tex, bibtex main, pdflatex main.tex, pdflatex main.tex. A generic article class is used until the target venue is selected.
+A TeX distribution with TikZ, natbib, and the standard math packages is needed. Keep all sections/ files next to main.tex.
 
-Current complete quantitative evidence for the selected no-boundary configuration is limited to ARKitScenes seed 10 with 5,599 validation frames. Three-seed ARKitScenes and ScanNet++ results belong to the earlier full-objective SACG configuration; the paper labels them accordingly. The model was chosen using validation results, so a new held-out scene-level evaluation is necessary.
+The main working SACG method retains the learned LiDAR-validity field and delayed gate regularization but omits the boundary-weighted loss. The best supported comparison is one seed on 5,599 ARKitScenes validation frames. The result is metric-specific, not established across seeds or held-out scenes.
 
-The full PromptDA backbone remains frozen for both SimpleRefiner and SACG. The simple CNN is **not** a fine-tuned PromptDA.
+Existing three-seed ARKitScenes and ScanNet++ numbers correspond to the EARLIER full SACG training objective, not the selected no-boundary method. Simple CNN is a separate trainable refiner on FROZEN PromptDA, not PromptDA finetuning.
+
+Before submitting, migrate into the current official journal template from https://ieeeaccess.ieee.org/author-center/, fix author information and disclosures, add independently held-out evaluations, reproduce checkpoints, measure trainable parameters and inference resources, and conduct matched-input/constant-gate ablations.
+
+See SOURCE_MAP.md and EXPERIMENTS_TODO.md for provenance and remaining work. The manuscript was composed from existing repository source and stored evaluation JSON; no new experiments were run as part of drafting.
