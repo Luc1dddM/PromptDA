@@ -1,23 +1,67 @@
-\documentclass[11pt,a4paper]{article}
-\usepackage[margin=1in]{geometry}
+\documentclass[10pt,twocolumn]{article}
+% A venue-neutral two-column draft, not an official CVPR/IEEE template.
+\usepackage[margin=0.75in,columnsep=0.24in]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage{amsmath,amssymb,booktabs,graphicx,array,hyperref}
-\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
-\title{\textbf{SACG: Spatially Adaptive Consistency Gating for Refinement of Frozen Prompt-Based Metric Depth Estimates}}
-\author{Author list to be finalized}
-\date{Working draft --- October 2026}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{hyperref}
+\usepackage{balance}
+\hypersetup{colorlinks=true,citecolor=blue!55!black,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlength{\parskip}{0pt}
+\setlength{\parindent}{1em}
+\setlength{\textfloatsep}{10pt plus 2pt minus 2pt}
+\newcommand{\method}{SACG}
+\newcommand{\nob}{SACG-NoB}
+\newcommand{\base}{PromptDA}
+\newcommand{\Depth}{D}
+\newcommand{\Dcoarse}{D_{\mathrm c}}
+\newcommand{\Dfinal}{\widehat D}
+\newcommand{\Egrad}{E}
+\newcommand{\Cgrad}{C}
+\newcommand{\Flidar}{L}
+\newcommand{\gatemap}{G}
+\newcommand{\loss}{\mathcal L}
+\newcommand{\absrel}{\mathrm{AbsRel}}
+\newcommand{\lone}{\mathrm{L1}}
+\newcommand{\rmse}{\mathrm{RMSE}}
+\newcommand{\need}[1]{\textcolor{red!65!black}{[\emph{Pending: #1}]}}
+
+\title{\vspace{-1em}\bfseries SACG: Spatially Adaptive Consistency-Gated Refinement\\of Frozen Prompt-Conditioned Metric Depth Estimates}
+\author{Anonymous working manuscript\\{\small Authorship and affiliation pending finalization}}
+\date{\small Working draft, October 2026}
 \begin{document}
+\twocolumn[
+\begin{@twocolumnfalse}
 \maketitle
+\vspace{-1.4em}
 \begin{abstract}
-Prompt-conditioned metric depth estimators combine image priors with low-resolution range measurements but can retain local depth errors. We study SACG, a lightweight refinement module trained while Prompt Depth Anything (PromptDA) remains entirely frozen. SACG uses RGB--depth gradient agreement and a learned spatial field derived from the validity of LiDAR samples to predict a gate, which modulates a depth residual estimated from RGB, coarse depth and frozen DPT features. Our selected variant is trained with valid-pixel L1 and a delayed gate penalty, without the boundary-weighted term of an earlier version. On 5,599 ARKitScenes validation frames (one training seed), it reduces AbsRel from 0.011505 to 0.011298 and L1 from 0.013479 to 0.013227\,m. It narrowly outperforms a separately trained residual CNN on these two metrics, but not on RMSE, RGB-edge-based boundary error or SSIM. We report these observations with their limitations and identify the controlled additional experiments necessary to evaluate architectural advantage.
+Low-resolution active depth measurements can disambiguate monocular scale, and prompt-conditioned depth foundation models have made their fusion practical at high spatial resolution. Nevertheless, a strong pretrained depth estimator may still make local errors, particularly where visual discontinuities and sparse range observations provide inconsistent evidence. A natural adaptation strategy is to train a small residual head while preserving the pretrained model. Whether an explicitly spatially gated head improves upon a plain residual convolutional network remains an empirical question. We study spatially adaptive consistency-gated refinement (\method), a lightweight adapter for frozen Prompt Depth Anything (\base). A residual branch combines RGB, coarse depth, and intermediate frozen decoder features; a second branch modulates the correction using image--depth gradient agreement, a learned spatial field constructed from LiDAR observation locations, and the coarse estimate. We examine the original objective with an additional boundary-weighted term and a simplified objective that omits it. Under the latter configuration, on 5,599 ARKitScenes validation frames using one training seed, \method\ reduces absolute relative error from 0.011505 to 0.011298 and absolute depth error from 0.013479 to 0.013227\,m compared with frozen \base. It narrowly improves these two metrics over a trained plain CNN, whereas the CNN obtains lower RMSE and RGB-edge-conditioned boundary error. We present a code-faithful formulation, paired comparisons and component studies, and analyze why the current evidence does not yet establish a general architectural advantage. The reported findings concern supervised, frozen-backbone adaptation rather than zero-shot prediction or PromptDA fine-tuning.
 \end{abstract}
+\vspace{0.6em}
+\noindent{\small\textbf{Keywords:} metric depth estimation; RGB--LiDAR fusion; depth refinement; frozen foundation models; adaptive gating; depth completion.}
+\vspace{1.1em}
+\end{@twocolumnfalse}
+]
 \input{sections/01_introduction}
 \input{sections/02_related_work}
 \input{sections/03_method}
 \input{sections/04_experiments}
 \input{sections/05_results}
 \input{sections/06_discussion}
-\bibliographystyle{plain}
+\balance
+\bibliographystyle{unsrtnat}
 \bibliography{references}
+\clearpage
+\appendix
+\input{sections/07_appendix}
 \end{document}
