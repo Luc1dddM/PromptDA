@@ -1,34 +1,118 @@
-\section{Method}
-\subsection{Frozen backbone and coarse depth}
-Let $I\in[0,1]^{3\times H\times W}$ be RGB, $S$ the low-resolution metric LiDAR prompt, and $D^\star$ the reference. A pretrained, frozen PromptDA $P_\theta$ produces
-\begin{equation}D_0=P_\theta(I,S), \qquad \nabla_\theta \mathcal L=0.\end{equation}
-A forward hook exposes frozen decoder features $F$ from \texttt{depth\_head.scratch.output\_conv1}, all under \texttt{torch.no\_grad()}.
+\section{Proposed Method}
+\label{sec:method}
+\subsection{Problem Setting and Design Rationale}
+Let $I\in[0,1]^{3\times H\times W}$ be a registered RGB observation and $S\in\mathbb R_{\ge0}^{1\times h\times w}$ a lower-resolution metric depth prompt. We denote the available dense ground truth by $D^\star$, with an accompanying valid set $\Omega$. The first stage is an off-the-shelf pretrained PromptDA model $P_\theta$:
+\begin{equation}
+D_0=P_\theta(I,S), \qquad \theta\ \text{fixed}.
+\label{eq:base}
+\end{equation}
+In the implementation, the backbone is explicitly placed in evaluation mode, all its parameters have \texttt{requires\_grad=False}, and its forward pass runs under \texttt{torch.no\_grad()}. In addition to $D_0$, a forward hook at \texttt{depth\_head.scratch.output\_conv1} exposes an intermediate depth-decoder feature $F_{\rm DPT}$. We use a separate lightweight trainable module to produce a revised prediction, rather than changing PromptDA's visual encoder or metric-prompt pathway.
 
-\subsection{Gradient consistency}
-The code calculates Sobel-gradient magnitudes and normalizes each image by its maximum. Let
-\begin{equation}E(X)=\frac{\sqrt{(K_x*X)^2+(K_y*X)^2+\epsilon}}{\max_{u,v}\sqrt{(K_x*X)^2+(K_y*X)^2+\epsilon}}.\end{equation}
-RGB is converted to grayscale using the mean channel value; depth is repeated over three channels before using the same routine. The agreement field is
-\begin{equation}C=\operatorname{clip}\left(1-|E(I)-E(D_0)|,0,1\right).\end{equation}
-This is a heuristic edge agreement score, not a calibrated prediction confidence.
+Refining a strong frozen model motivates two complementary functions. A \emph{correction generator} should estimate the direction and magnitude of a potentially useful metric-depth adjustment. A \emph{correction gate} should determine how much of that adjustment is applied at each pixel. Their implemented combination is
+\begin{equation}
+\widehat D=D_0+G\odot R,
+\label{eq:refine}
+\end{equation}
+where $R\in\mathbb R^{1\times H\times W}$ is the proposed residual and $G\in(0,1)^{1\times H\times W}$ is the spatial gate. The formulation does not force every residual to have the same magnitude. Nor does it, by itself, guarantee that a gated model is better than an ungated residual CNN; we test that empirical question separately.
 
-\subsection{Learnable LiDAR validity field}
-With $M=\mathbf 1[S>0]$, a Gaussian-initialized, trainable $31\times31$ convolution forms $U=K_\psi*M$. The code applies per-image min--max normalization and bilinear resizing:
-\begin{equation}L=\operatorname{Resize}\left(\operatorname{clip}\left(\frac{U-\min U}{\max(\max U-\min U,10^{-6})},0,1\right)\right).\end{equation}
-It encodes the locations of valid samples, not their numerical depth. Other code paths use exponential distance to a valid pixel (fixed field) or set the gate field to zero (no field), while PromptDA still consumes the metric depth prompt.
+\subsection{Gradient Agreement as a Contextual Cue}
+Depth discontinuities often correspond to image edges, but visual texture, lighting changes, and occlusion can break this correspondence. We compute a deliberately simple image--depth gradient-agreement cue rather than inferring geometric confidence from RGB appearance alone. For a single-channel field $X$, the Sobel magnitude and normalization are
+\begin{align}
+e(X)&=\sqrt{(K_x*X)^2+(K_y*X)^2+\epsilon},\\
+E(X)&=\frac{e(X)}{\max_{p}e(X)_p},
+\label{eq:edge}
+\end{align}
+where $K_x$ and $K_y$ are standard $3\times3$ Sobel filters and $\epsilon$ is a small stabilizer. The maximum is taken separately over the spatial dimensions for each image. The RGB tensor is converted into a grayscale image by averaging its three channels; coarse depth is repeated along the channel dimension before the shared routine, which yields the same mean-channel depth values.
 
-\subsection{Gate and residual}
-The gating CNN takes $[C,L,D_0]$ and has one convolution--batch-normalization--ReLU block with 16 channels and a final single-channel convolution:
-\begin{equation}G=\operatorname{sigmoid}(g_\omega([C,L,D_0])).\end{equation}
-The residual CNN has three convolution--batch-normalization--ReLU blocks with 32 hidden channels plus a final single-channel convolution. It takes RGB, coarse depth and bilinearly resized frozen DPT features:
-\begin{equation}R=f_\phi([I,D_0,\widetilde F]),\qquad \boxed{\widehat D=D_0+G\odot R}.\end{equation}
-Only $\psi,\omega,\phi$ are optimized.
+We define the gradient-consistency cue as
+\begin{equation}
+C=\operatorname{clip}\bigl(1-|E(I)-E(D_0)|,\ 0,\ 1\bigr).
+\label{eq:cgrad}
+\end{equation}
+Large $C$ denotes similar \emph{normalized edge magnitudes}, not necessarily matching edge orientations or physically correct depth. A large score may arise in textureless regions where both signals have weak gradients. Conversely, a shadow boundary may have a strong appearance response and no corresponding depth discontinuity. Consequently, the cue enters a learnable gating network together with other context; it should not be interpreted as a calibrated confidence probability.
 
-\subsection{Selected no-boundary training objective}
-For valid pixels $\Omega=\{p:D^\star_p>0.01\,\mathrm m,\ D^\star_p\text{ finite}\}$, define
-\begin{equation}\mathcal L_{\mathrm{L1}}=\frac{1}{|\Omega|}\sum_{p\in\Omega}|\widehat D_p-D^\star_p|,\quad
-\mathcal L_{\mathrm{gate}}=\frac{1}{HW}\sum_p G_p\operatorname{stopgrad}(C_p).\end{equation}
-The selected objective is
-\begin{equation}\mathcal L(t)=\mathcal L_{\mathrm{L1}}+\mathbf1[t\ge5000]\,0.1\,\mathcal L_{\mathrm{gate}}.\end{equation}
-The earlier full method also used $0.5\mathcal L_{\mathrm{boundary}}$ where
-\begin{equation}\mathcal L_{\mathrm{boundary}}=\operatorname{mean}_{p\text{ over image}}\left[\exp(10E(I)_p)|\widehat D_p-D^\star_p|\mathbf1[p\in\Omega]\right].\end{equation}
-This additional term is disabled in our selected method. Removing a loss component is a model-selection decision rather than a standalone methodological novelty.
+\subsection{Spatial Support of LiDAR Measurements}
+The sparse metric measurements play two roles in the full system. Their \emph{numerical values} enter the pretrained PromptDA forward pass in Eq.~\eqref{eq:base}. Separately, their \emph{availability pattern} contributes spatial context to the adapter. Specifically, we construct a low-resolution binary validity mask
+\begin{equation}M_{ij}=\mathbf{1}\{S_{ij}>0\}.\end{equation}
+The selected configuration computes an unnormalized field $U=K_\psi*M$, where $K_\psi$ is a single-channel $31\times31$ learnable convolution initialized with a two-dimensional Gaussian-like kernel. Within each image, the map is min--max normalized and resized:
+\begin{align}
+\overline U &= \frac{U-\min U}{\max(\max U-\min U,10^{-6})},\\
+L&=\operatorname{BilinearResize}\bigl(\operatorname{clip}(\overline U,0,1)\bigr).
+\label{eq:lidar}
+\end{align}
+The convolution operates on the native prompt grid before the field is resized to $H\times W$. It is not equivalent to interpolating the metric depth values or explicitly finding nearest three-dimensional neighbors. The resulting field can respond to local sample density or arrangement; because its filter is learned, it is not necessarily monotonic with Euclidean distance to the nearest measurement.
+
+For comparison, the fixed-field implementation computes a distance transform $d(p,M)$ and $L_{\rm fixed}(p)=\exp[-d(p,M)/\sigma]$ before resizing, with nominal $\sigma=50$ in prompt-grid pixels. Another ablation replaces $L$ by zeros. Importantly, these interventions affect only the adapter gate: they do not remove $S$ from the pretrained PromptDA input. Thus, an experiment named \emph{no LiDAR field} does not represent an image-only model.
+
+\subsection{Separate Gate and Residual Networks}
+The gate network receives three spatially aligned single-channel inputs:
+\begin{equation}
+G=\sigma\left(g_\omega([C,L,D_0])\right).
+\label{eq:gate}
+\end{equation}
+The implementation of $g_\omega$ uses a $3\times3$ convolution with 16 channels, batch normalization, ReLU, and a second $3\times3$ convolution to one output channel. The sigmoid $\sigma$ bounds gate values between zero and one. Both the coarse depth itself and the two guidance fields can influence gate placement and intensity.
+
+The correction branch receives an alternative set of information:
+\begin{equation}
+R=f_\phi\left([I,D_0,\widetilde F_{\rm DPT}]\right),
+\label{eq:residual}
+\end{equation}
+where $\widetilde F_{\rm DPT}$ is a bilinearly resized frozen decoder feature map. The residual CNN comprises three convolution--batch-normalization--ReLU blocks with 32 hidden channels and a final $3\times3$ convolution producing one metric-depth residual channel. Its output is \emph{not} restricted to be positive, allowing either positive or negative corrections through Eq.~\eqref{eq:refine}. In the current code, the output itself is not clamped to positive depth and is not constrained to equal LiDAR measurements at observed locations.
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[>=Latex, font=\small, node distance=8mm,
+box/.style={draw,rounded corners=2pt,align=center,minimum height=8mm,inner sep=5pt},
+arrow/.style={-Latex,thick}]
+\node[box,fill=blue!6] (input) {RGB image $I$\\LiDAR prompt $S$};
+\node[box,fill=blue!6,right=15mm of input] (pd) {Pretrained PromptDA\\\textbf{frozen}};
+\node[box,fill=blue!6,right=16mm of pd] (coarse) {Coarse depth $D_0$\\DPT feature $F_{\rm DPT}$};
+\node[box,fill=orange!9,below=16mm of input] (signals) {RGB--depth gradients $C$\\LiDAR validity field $L$};
+\node[box,fill=orange!9,right=24mm of signals] (gate) {Gate CNN $g_\omega$\\$G=\sigma(g_\omega([C,L,D_0]))$};
+\node[box,fill=green!8,right=23mm of gate] (residual) {Residual CNN $f_\phi$\\$R=f_\phi([I,D_0,\widetilde F_{\rm DPT}])$};
+\node[box,fill=green!8,above=11mm of residual] (output) {Refined depth\\$\widehat D=D_0+G\odot R$};
+\draw[arrow] (input)--(pd);
+\draw[arrow] (pd)--(coarse);
+\draw[arrow] (input)--(signals);
+\draw[arrow] (signals)--(gate);
+\draw[arrow] (coarse.south) |- (gate.north);
+\draw[arrow] (coarse.south east) |- (residual.north);
+\draw[arrow] (gate)--(residual);
+\draw[arrow] (residual)--(output);
+\end{tikzpicture}
+\caption{System-level depiction of SACG. The frozen pretrained estimator receives numerical metric LiDAR values, while a learned convolution of the validity mask informs the gating path. The residual branch uses frozen DPT features. The two outputs are combined as an additive gated correction; the arrow from gate to residual represents the final multiplication, not conditioning of the residual CNN itself.}
+\label{fig:architecture}
+\end{figure*}
+
+\subsection{Supervised Objective and Model Selection}
+At valid target pixels $\Omega=\{p:D^\star_p>0.01\,{\rm m},\ D^\star_p\ \text{finite}\}$, our basic supervised term is
+\begin{equation}
+\loss_{\rm L1}=\frac{1}{|\Omega|}\sum_{p\in\Omega}|\widehat D_p-D^\star_p|.
+\label{eq:l1}
+\end{equation}
+A gate penalty discourages large gate activations where the heuristic gradient agreement is high:
+\begin{equation}
+\loss_{\rm gate}=\frac{1}{HW}\sum_p G_p\,\operatorname{stopgrad}(C_p).
+\label{eq:lgate}
+\end{equation}
+The cue is detached in the regularizer. The gate loss is \emph{not} a likelihood term and does not train a calibrated confidence estimate. The implementation activates this penalty after a warmup of 5,000 optimizer steps:
+\begin{equation}
+\loss_{\rm selected}(t)=\loss_{\rm L1}
++\mathbf{1}[t\ge5000]\lambda_g\loss_{\rm gate},
+\qquad\lambda_g=0.1.
+\label{eq:objective}
+\end{equation}
+
+An earlier SACG configuration additionally included an RGB-edge-weighted absolute error:
+\begin{equation}
+\loss_{\rm boundary}
+=\frac{1}{HW}\sum_p
+e^{10E(I)_p}|\widehat D_p-D^\star_p|\mathbf{1}[p\in\Omega],
+\label{eq:lboundary}
+\end{equation}
+with $\lambda_b=0.5$. Its image-wide denominator differs from the valid-pixel normalization of Eq.~\eqref{eq:l1}. The exponential term can produce disproportionate weights at strong RGB edges, which may be geometric or textural. We found that omitting this term improved several validation metrics in one ARKitScenes experiment. We therefore use Eq.~\eqref{eq:objective}, with \texttt{use\_boundary\_loss=False}, as the selected model. This is a data-driven objective choice and should not be conflated with removing gradient agreement from the network.
+
+\subsection{Plain CNN Control and Attribution}
+To distinguish gains from simply adding trainable parameters, the comparison includes a separate \emph{plain residual CNN}. It receives six channels: RGB ($3$), frozen PromptDA depth ($1$), nearest-resized numerical LiDAR depth ($1$), and nearest-resized validity ($1$). It consists of three convolution blocks of 56 channels and a final residual prediction layer, with zero-initialized final convolution weights so that its initial output equals the pretrained estimate. All PromptDA parameters remain frozen.
+
+This control differs from SACG in more than the presence of a gate: it accesses numerical LiDAR observations directly, and it does not use frozen intermediate decoder features. Accordingly, a difference between the two does not by itself measure the isolated effect of gating. The decisive follow-up is to fix the input feature set and objective, then compare a learned $G$ with a constant gate and with a parameter-matched ungated residual. This limitation shapes our interpretation of the results.
