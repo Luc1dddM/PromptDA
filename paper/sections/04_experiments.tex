@@ -1,12 +1,53 @@
 \section{Experimental Protocol}
-\paragraph{Data.}
-We use ARKitScenes \cite{baruch2021arkitscenes}, whose committed evaluation includes 5,599 validation frames, and a locally prepared ScanNet++ \cite{yeshwanth2023scannetpp} export with 2,000 evaluated frames per run and 20,000 training-subset frames. The latter is not the official PromptDA benchmark protocol. RGB and dense target tensors are $756\times1008$; the prompt retains its native low-resolution grid. Depth is converted from millimeters to meters. Targets are resized by nearest neighbor. Training uses synchronized horizontal flips, while evaluation uses no augmentation.
+\label{sec:experiments}
+\subsection{Datasets and Evaluation Splits}
+Our primary study uses ARKitScenes~\cite{baruch2021arkitscenes}, which pairs mobile RGB imagery and low-resolution active-depth observations with dense reference geometry. We evaluate the stored ARKitScenes runs using 5,599 validation frames. RGB and target depth are processed at $756\times1008$ resolution, whereas the low-resolution prompt remains in its original grid so that PromptDA handles the scale discrepancy. The custom loader applies orientation adjustments based on the recorded camera direction, converts depth from millimeters to meters, and uses nearest-neighbor interpolation for dense targets to avoid synthesizing intermediate depth values through bilinear mixing. Validity is defined by finite target depth above $0.01$\,m.
 
-\paragraph{Optimization.}
-The pretrained PromptDA ViT-L and legacy DPT head remain frozen. The refinement module uses AdamW with learning rate $10^{-4}$, weight decay $10^{-4}$, batch size two, cosine scheduler and 10,000 optimization steps. The gate penalty begins at step 5,000; the selected variant disables boundary loss. The best validation-L1 checkpoint is selected.
+We also inspect an existing locally prepared ScanNet++~\cite{yeshwanth2023scannetpp} dataset export with RGB images, commodity-sensor depth prompts, and rendered reference depth. Its training schedule uses a scene-balanced subset capped at 20,000 frames, and comparisons sample 2,000 validation frames. The export's scenes are separated using local \texttt{train.txt} and \texttt{val.txt} split files; the loader checks that scene identifiers do not overlap. RGB masks can remove invalid rendered target regions and corresponding low-resolution prompt locations. This protocol is tailored to available hardware and is \emph{not claimed to reproduce} the original PromptDA paper's benchmark setup.
 
-\paragraph{Baselines.}
-Frozen PromptDA requires no downstream training. A separately trained simple residual CNN has six input channels: RGB (three), PromptDA depth (one), resized LiDAR metric values (one), and validity mask (one). Its three hidden convolution blocks have 56 channels; it is optimized with valid-pixel L1. This \textbf{does not fine-tune PromptDA}. Ablations vary LiDAR gate fields and optional boundary loss.
+\subsection{Frozen Backbone and Optimization}
+We use pretrained PromptDA with the ViT-L encoder and \texttt{legacy} DPT decoder configuration. The official pretrained model is loaded for both the baseline and adapter systems. The trainer asserts that all PromptDA parameters are frozen and constructs an AdamW optimizer only over the added refinement module. The implemented learning rate is $10^{-4}$ with weight decay $10^{-4}$; a cosine annealing scheduler spans 10,000 optimizer steps. We use batch size two and gradient-norm clipping at 1.0. The random seed is applied to Python, NumPy, and PyTorch; the code also enables deterministic cuDNN behavior. Train-time augmentation contains horizontal flips, while validation uses a consistent valid-depth mask without random augmentation.
 
-\paragraph{Metrics and validity.}
-L1, AbsRel and RMSE use finite ground-truth depth strictly above $0.01$\,m, computed per frame and then averaged across images. RGB-edge BoundaryAbsRel uses Sobel RGB edges (threshold 0.1; dilation 5), not annotated depth discontinuities. SSIM is computed with invalid regions zero-filled and is auxiliary. All seed-10 ARKitScenes rows use the same 5,599-frame manifest (SHA-256 \texttt{5b8a182fd4fba0dead6371b54d15c96974d7f5f853074b210b7c50ea3f3dd2b9}). The selected model was chosen using validation results, not an unseen test split; cross-seed ScanNet++ sample sets also vary.
+The full SACG objective combines valid-pixel L1, gate regularization beginning at step 5,000, and an edge-weighted boundary term. The selected configuration retains the same architecture, learnable LiDAR field, optimization parameters, and delayed gate regularizer, but disables the boundary term. We use the checkpoint with the lowest validation L1. Since validation influenced both checkpoint selection and the choice to drop the boundary term, this validation split cannot be described as an independent final test set.
+
+\subsection{Compared Systems}
+The \emph{frozen baseline} is official PromptDA inference on RGB and the low-resolution depth prompt, without any downstream trainable module. The \emph{plain residual CNN} is a separate, supervised head over RGB, coarse depth, resized numerical LiDAR samples, and their validity mask; it is trained with valid-pixel L1 while PromptDA stays frozen. The \emph{full SACG} ablation uses the originally proposed boundary-weighted objective. Additional variants replace the learnable validity field with a fixed distance-transform field or remove the gate field entirely. These latter ablations still use full-SACG boundary supervision in the available committed results, so they do not isolate the field within the selected no-boundary objective.
+
+\begin{table}[t]
+\caption{Main implementation and evaluation settings. Different training seeds are not automatically equivalent to independent data splits.}
+\label{tab:protocol}
+\centering\small
+\begin{tabular}{@{}p{0.41\columnwidth}p{0.49\columnwidth}@{}}\toprule
+Setting & Value\\ \midrule
+Frozen backbone & PromptDA ViT-L, legacy DPT\\
+Dense image/target size & $756\times1008$\\
+Optimizer & AdamW\\
+Learning rate/decay & $10^{-4}$ / $10^{-4}$\\
+Train batch size & 2\\
+Optimization budget & 10,000 steps\\
+Schedule & Cosine annealing\\
+Gradient clipping & Norm 1.0\\
+Gate coefficient & 0.1 from step 5,000\\
+Selected boundary weight & 0 (disabled)\\
+Selection metric & Validation L1\\
+ARKitScenes validation & 5,599 frames\\
+ScanNet++ local evaluation & 2,000 frames/run\\
+Aggregation & Mean of per-image metrics\\ \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation Measures}
+We compute each metric on valid reference pixels and then report the arithmetic mean of the per-image values. For prediction $\widehat D$ and reference $D^\star$, the per-image quantities are
+\begin{align}
+\mathrm{L1}&=\frac1{|\Omega|}\sum_{p\in\Omega}|\widehat D_p-D^\star_p|,\\
+\mathrm{AbsRel}&=\frac1{|\Omega|}\sum_{p\in\Omega}
+\frac{|\widehat D_p-D^\star_p|}{D^\star_p},\\
+\mathrm{RMSE}&=\sqrt{\frac1{|\Omega|}\sum_{p\in\Omega}
+(\widehat D_p-D^\star_p)^2}.
+\end{align}
+We additionally use standard depth-threshold accuracies $\delta_1,\delta_2,\delta_3$, and a stricter $\delta_{0.5}$ implemented by the project. The RGB-edge-conditioned BoundaryAbsRel restricts the relative error to pixels inside a dilated Sobel-RGB edge mask (threshold 0.1, dilation kernel 5). It measures errors near \emph{image} discontinuities, not necessarily annotated depth discontinuities. Auxiliary SSIM is calculated after setting invalid reference pixels to zero; it is not an official masked-depth structural-similarity benchmark.
+
+\subsection{Comparability and Stored Artifacts}
+For each compared pair, the inference script loads an independent frozen PromptDA baseline and a wrapped PromptDA-plus-refiner model, then asserts numerical agreement between their coarse outputs. It saves per-frame metrics, aggregate metrics, input configuration, identifiers, and a validation manifest hash. In the ARKitScenes seed-10 results, the compared variants share an identical 5,599-frame evaluation manifest, enabling paired descriptive comparison. Their shared identifier manifest has SHA-256 prefix \texttt{5b8a182fd4fba0d}. This does not guarantee statistical significance, nor does it eliminate differences in the data made available to the refinement modules.
+
+The currently committed three-seed full-SACG experiments are not trials of the selected no-boundary objective. On ScanNet++, the \texttt{data\_seed} was changed with the training seed, so differences across runs also reflect different evaluated frame subsets. The resulting variation should not be interpreted as pure training-seed variance. We explicitly avoid combining these runs into an uncertainty estimate for the selected model.
