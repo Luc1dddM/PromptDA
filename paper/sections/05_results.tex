@@ -1,36 +1,93 @@
-\section{Results}
-\subsection{ARKitScenes: selection of the main variant}
-\begin{table}[t]\centering
-\caption{Committed ARKitScenes validation, seed 10, identical 5,599 frames. Lower is better for all four metrics.}
-\label{tab:arkit}
-\resizebox{\linewidth}{!}{\begin{tabular}{lcccc}\toprule
-Method & AbsRel & L1 (m) & RMSE (m) & BoundaryAbsRel \\\midrule
-Frozen PromptDA & 0.011505 & 0.013479 & 0.031950 & 0.020598 \\
-Simple residual CNN & 0.011321 & 0.013257 & \textbf{0.031793} & \textbf{0.020335} \\
-SACG with boundary loss & 0.011358 & 0.013305 & 0.031846 & 0.020446 \\
-\textbf{SACG without boundary loss} & \textbf{0.011298} & \textbf{0.013227} & 0.031803 & 0.020382 \\\bottomrule
-\end{tabular}}\end{table}
-The selected no-boundary variant improves AbsRel by 1.79\% and L1 by 1.87\% over frozen PromptDA, with small additional improvements over the simple CNN. However, the CNN has lower RMSE and RGB-edge-based boundary error. Thus these are single-seed, metric-specific gains, not evidence of overall superiority.
-\subsection{Component ablations}
-\begin{table}[t]\centering\caption{ARKitScenes seed-10 SACG configurations; field ablations retain boundary loss.}\begin{tabular}{lccc}\toprule
-Variant & AbsRel & L1 (m) & BoundaryAbsRel \\\midrule
-Full SACG with boundary & 0.011358 & 0.013305 & 0.020446 \\
-No LiDAR gate field & 0.011396 & 0.013351 & 0.020497 \\
-Fixed LiDAR gate field & 0.011420 & 0.013385 & 0.020480 \\
-No boundary loss & \textbf{0.011298} & \textbf{0.013227} & \textbf{0.020382} \\\bottomrule
-\end{tabular}\end{table}
-The selected loss changes only the boundary term. The field ablations are instead comparisons under the earlier full loss and therefore do not isolate the field's necessity under the selected objective.
-\subsection{Existing multi-seed results belong to the earlier full objective}
-\begin{table}[t]\centering\caption{ARKitScenes results for SACG \emph{with boundary loss}, not the selected model.}\begin{tabular}{rccc}\toprule
-Seed & AbsRel & L1 (m) & RMSE (m) \\\midrule
-10 & 0.011358 & 0.013305 & 0.031846 \\
-26 & 0.011399 & 0.013365 & 0.031891 \\
-42 & 0.011376 & 0.013315 & 0.031876 \\\bottomrule
-\end{tabular}\end{table}
-\begin{table}[t]\centering\caption{ScanNet++ local-export results for full SACG \emph{with boundary loss}, 2,000 frames per seed; not the selected model.}\begin{tabular}{rcccc}\toprule
-Seed & Baseline AbsRel & Full SACG AbsRel & Baseline L1 & Full SACG L1 \\\midrule
-10 & 0.029730 & 0.029613 & 0.048934 & 0.048479 \\
-26 & 0.028579 & 0.028510 & 0.048643 & 0.048400 \\
-42 & 0.029356 & 0.029263 & 0.048766 & 0.048388 \\\bottomrule
-\end{tabular}\end{table}
-Stored full-objective models improve AbsRel and L1 against frozen PromptDA on each evaluated subset. The ScanNet++ subset varies by seed, and no committed cross-dataset result was found for selected no-boundary SACG. No new checkpoint validation, paired confidence intervals or held-out tests were executed for this draft.
+\section{Results and Analysis}
+\label{sec:results}
+We first compare SACG against frozen PromptDA and a separately trained ungated CNN on the same ARKitScenes validation frames. We then analyze existing component ablations, discuss the earlier three-seed full-objective experiments, and examine what can and cannot be concluded from the ScanNet++ export. All quantitative values in this section are transcribed from versioned comparison artifacts in the repository; no additional checkpoint evaluation was performed when writing this manuscript.
+
+\subsection{Comparison With Frozen PromptDA and a Plain CNN}
+Table~\ref{tab:main_results} presents the most relevant same-frame comparison for selecting the working SACG configuration. All methods use the same 5,599 ARKitScenes validation frames, with a matching evaluation manifest. Frozen PromptDA produces an AbsRel of 0.011505 and an L1 error of 0.013479\,m. Adding the independently trained simple CNN lowers these measures to 0.011321 and 0.013257\,m, respectively. Thus, substantial portions of the available improvement over the frozen predictor can already be obtained by a conventional small residual head.
+
+\begin{table*}[t]
+\caption{ARKitScenes seed-10 evaluation on the same 5,599 validation frames. Best in each column is shown in bold. Error metrics are lower-is-better; SSIM is higher-is-better. Values are mean-per-frame aggregates, not independent replicate means.}
+\label{tab:main_results}
+\centering
+\begin{tabular}{lccccc}
+\toprule
+Method & AbsRel $\downarrow$ & L1 (m) $\downarrow$ & RMSE (m) $\downarrow$ & RGB-edge BoundaryAbsRel $\downarrow$ & SSIM $\uparrow$\\
+\midrule
+Frozen PromptDA & 0.011505 & 0.013479 & 0.031950 & 0.020598 & \textbf{0.992446}\\
+Frozen PromptDA + simple CNN & 0.011321 & 0.013257 & \textbf{0.031793} & \textbf{0.020335} & 0.992247\\
+Frozen PromptDA + full SACG & 0.011358 & 0.013305 & 0.031846 & 0.020446 & 0.992147\\
+Frozen PromptDA + SACG-NoB (selected) & \textbf{0.011298} & \textbf{0.013227} & 0.031803 & 0.020382 & 0.992149\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The selected configuration, SACG-NoB, improves AbsRel by approximately 1.79\% and L1 by 1.87\% compared with frozen PromptDA. It also achieves a lower error than the simple CNN on both metrics. The absolute difference between SACG-NoB and the CNN is, however, only about $2.21\times10^{-5}$ in AbsRel and $2.94\times10^{-5}$\,m in L1. Without repeated training runs or a paired scene-level uncertainty analysis, it would be inappropriate to infer that such a narrow margin is stable.
+
+Not all metrics favor SACG-NoB. The simple CNN has lower RMSE (0.031793 versus 0.031803\,m) and lower RGB-edge-conditioned relative error (0.020335 versus 0.020382). The frozen baseline also has the highest auxiliary SSIM. This mixed pattern is informative: improving mean absolute error does not necessarily improve larger squared errors, boundary-adjacent regions, or image-level structural similarity. A selective adapter must be evaluated beyond a single aggregate metric, particularly if it is intended for geometric reconstruction.
+
+\subsection{Effects of the Boundary-Weighted Training Term}
+The earlier full SACG objective used the edge-weighted loss defined in Eq.~\eqref{eq:lboundary}. On the same seed-10 validation subset, removing this term reduces AbsRel from 0.011358 to 0.011298 and L1 from 0.013305 to 0.013227\,m. It also reduces the RGB-edge boundary metric from 0.020446 to 0.020382. Consequently, the code's selected architecture and correction pathways are kept intact while the additional boundary loss is disabled.
+
+This is an objective ablation, not evidence that geometric depth edges are unimportant. The old weighting grows exponentially with normalized RGB edge magnitude, and image edges include both geometric and photometric effects. Moreover, the implementation averages the weighted error over all pixels rather than normalizing by the number of valid target pixels. Those design choices offer hypotheses for the observed behavior but do not demonstrate a causal mechanism. A rigorous analysis should inspect error versus RGB-edge strength, actual ground-truth depth discontinuities, and depth sparsity.
+
+\subsection{Sensitivity to LiDAR-Validity Guidance}
+Table~\ref{tab:ablation_results} records three related architecture variants and the selected loss variant. With the original boundary supervision enabled, removing the validity field from the gate raises AbsRel to 0.011396, whereas replacing it with the fixed distance-transform field produces 0.011420. The learnable-field full model obtains 0.011358 under that loss. This suggests that an adaptive validity field may be beneficial \emph{within the full-boundary objective}.
+
+\begin{table}[t]
+\caption{ARKitScenes seed-10 ablations. Unless otherwise stated, rows retain the original boundary-weighted loss. The no-field intervention concerns SACG's gate only; the frozen base model still consumes metric LiDAR.}
+\label{tab:ablation_results}
+\centering\small
+\begin{tabular}{lccc}
+\toprule
+SACG configuration & AbsRel & L1 (m) & BoundaryAbsRel\\
+\midrule
+Full (+ boundary) & 0.011358 & 0.013305 & 0.020446\\
+No LiDAR gate field & 0.011396 & 0.013351 & 0.020497\\
+Fixed LiDAR gate field & 0.011420 & 0.013385 & 0.020480\\
+No boundary loss & \textbf{0.011298} & \textbf{0.013227} & \textbf{0.020382}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These findings \emph{do not} establish that the learnable validity field is necessary for SACG-NoB, because the field ablations and selected method were trained with different objectives. The appropriate follow-up is a factorial experiment holding the objective fixed while removing or replacing the field. Similarly, a no-gate-loss experiment is not equivalent to replacing the learned gate by the constant value one: the former changes regularization, whereas the latter removes the gating function itself.
+
+\subsection{Full-SACG Multi-Seed Evidence}
+Table~\ref{tab:full_seeds} reports three existing ARKitScenes training seeds, all for SACG \emph{with} boundary-weighted supervision. Each gives lower L1 and AbsRel than the frozen PromptDA baseline, but the magnitude of improvement changes. The values should not be presented as three trials of SACG-NoB; the selected configuration has one committed validation comparison in the inspected repository snapshot.
+
+\begin{table}[t]
+\caption{Existing ARKitScenes runs for full SACG \emph{with boundary loss}. These do not measure the repeatability of the selected no-boundary configuration.}
+\label{tab:full_seeds}
+\centering
+\begin{tabular}{rccc}
+\toprule
+Training seed & AbsRel & L1 (m) & RMSE (m)\\
+\midrule
+10 & 0.011358 & 0.013305 & 0.031846\\
+26 & 0.011399 & 0.013365 & 0.031891\\
+42 & 0.011376 & 0.013315 & 0.031876\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ScanNet++ Results: Evidence for an Earlier Variant}
+We also inspected the existing local ScanNet++ export evaluations. Table~\ref{tab:scannet_results} contrasts frozen PromptDA with full SACG, again including the boundary-weighted loss. Relative improvements on these local evaluations are smaller than those seen in ARKitScenes, but the full model decreases L1 and AbsRel in each recorded run. This suggests that refinement may remain useful outside ARKitScenes for the \emph{earlier objective}, but it says nothing definitive about transfer of SACG-NoB.
+
+\begin{table*}[t]
+\caption{Local ScanNet++ export, 2,000 validation frames for each run; \emph{full SACG with boundary loss}. The evaluation subset changes with the seed, so comparisons are paired only within each row. No SACG-NoB ScanNet++ measurements are claimed.}
+\label{tab:scannet_results}
+\centering
+\begin{tabular}{rcccccc}
+\toprule
+Seed & Baseline AbsRel & Full SACG AbsRel & Baseline L1 (m) & Full SACG L1 (m) & Baseline RMSE (m) & Full SACG RMSE (m)\\
+\midrule
+10 & 0.029730 & 0.029613 & 0.048934 & 0.048479 & 0.133044 & 0.131989\\
+26 & 0.028579 & 0.028510 & 0.048643 & 0.048400 & 0.131430 & 0.130808\\
+42 & 0.029356 & 0.029263 & 0.048766 & 0.048388 & 0.132073 & 0.131250\\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The training-seed and dataset-subset-seed settings change together between these rows. As a result, the displayed differences across seeds reflect both optimization variability and different selected frames. An informative future evaluation would fix both the training frame manifest and validation/test frame manifests for all model seeds. Only then could mean differences and uncertainty due to training initialization be interpreted cleanly.
+
+\subsection{Implications for the Architectural Hypothesis}
+The strongest conclusion supported by the recorded results is that a small supervised adapter can improve a high-quality frozen prompt-conditioned depth model without altering the original pretrained weights. Whether \emph{consistency-gated adaptation} provides a substantial, reproducible advantage over a suitably controlled ungated adapter is still unresolved. The closest empirical comparison shows only a very small L1 and AbsRel gap, with opposing trends on other metrics. This finding directly motivates the controlled experiments described next rather than an unsupported claim of state-of-the-art depth accuracy.
