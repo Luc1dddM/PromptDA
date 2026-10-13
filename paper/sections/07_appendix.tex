@@ -1,0 +1,14 @@
+\section{Reproducibility and Evidence Ledger}
+This appendix records the exact sources of the evaluation numbers quoted in the paper, so that new runs can be distinguished from prior development results. These are \emph{stored experiment outputs}; we have not independently rerun their checkpoints for this manuscript.
+
+\subsection{Model and Training Implementation}
+The added module and loss are implemented in \texttt{promptda/sacg.py}, the training protocol in \texttt{training/train\_sacg.py}, and the comparison protocol in \texttt{compare\_inference.py}. Preprocessing lives in \texttt{dataset/dataset.py} and \texttt{dataset/scannetpp.py}; the metric formulas are implemented in \texttt{training/metrics.py}. The frozen-backbone check verifies that the PromptDA weights have \texttt{requires\_grad=False}. The optimizer updates only the parameters of the attached refinement module.
+
+\subsection{Recorded ARKitScenes Comparisons}
+The seed-10 selected no-boundary model was evaluated in \texttt{results/sacg\_arkitscenes\_ablation\_no\_boundary\_fair\_v1\_seed\_10/comparison\_results.json}. The full-objective result comes from \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_10\_learnable/comparison\_results.json}. The simple CNN comparator is in \texttt{results/simple\_refiner\_arkitscenes\_fair\_v1\_seed\_10/comparison\_results.json}. Corresponding no-LiDAR and fixed-LiDAR field results are stored under \texttt{results/sacg\_arkitscenes\_ablation\_no\_lidar\_fair\_v1\_seed\_10/} and \texttt{results/sacg\_arkitscenes\_ablation\_fixed\_lidar\_fair\_v1\_seed\_10/}. All share a 5,599-frame evaluation manifest.
+
+\subsection{Recorded Additional Runs}
+ARKitScenes full-objective seeds 26 and 42 are in \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_26\_learnable/} and \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_42\_learnable/}. ScanNet++ full-objective runs are under \texttt{results/scannetpp\_20k\_fair\_v1\_seed\_\{10,26,42\}\_learnable/}. These paths should not be cited as evidence for the selected no-boundary objective.
+
+\subsection{Remaining Experiments}
+A submission-ready manuscript would require SACG-NoB at multiple training seeds with the same fixed data-selection seed, a matched-input simple CNN, a constant-gate ablation, ablations of gradient agreement and learned LiDAR field under the selected objective, an independent held-out test evaluation, and runtime and error-map analysis. Claims should be revised after those measurements are completed.
