@@ -1,0 +1,54 @@
+\begin{thebibliography}{1}
+
+\bibitem{baruch2021arkitscenes}
+Gilad Baruch, Zhuoyuan Chen, Afshin Dehghan, Tal Dimry, Yuri Feigin, Peter Fu,
+  Thomas Gebauer, Brandon Joffe, Daniel Kurz, Arik Schwartz, and Elad Shulman.
+\newblock Arkitscenes: A diverse real-world dataset for 3d indoor scene
+  understanding using mobile rgb-d data.
+\newblock {\em arXiv preprint arXiv:2111.08897}, 2021.
+
+\bibitem{lin2025promptda}
+Haotong Lin, Sida Peng, Jingxiao Chen, Songyou Peng, Jiaming Sun, Minghuan Liu,
+  Hujun Bao, Jiashi Feng, Xiaowei Zhou, and Bingyi Kang.
+\newblock Prompting depth anything for 4k resolution accurate metric depth
+  estimation.
+\newblock In {\em Proceedings of the IEEE/CVF Conference on Computer Vision and
+  Pattern Recognition}, pages 17070--17080, 2025.
+
+\bibitem{ma2018sparse}
+Fangchang Ma and Sertac Karaman.
+\newblock Sparse-to-dense: Depth prediction from sparse depth samples and a
+  single image.
+\newblock In {\em IEEE International Conference on Robotics and Automation},
+  2018.
+
+\bibitem{oquab2024dinov2}
+Maxime Oquab, Timoth{\'e}e Darcet, Th{\'e}o Moutakanni, Huy~V. Vo, Marc
+  Szafraniec, Vasil Khalidov, Pierre Fernandez, Daniel Haziza, Francisco Massa,
+  Alaaeldin El-Nouby, Mido Assran, Nicolas Ballas, Wojciech Galuba, Russell
+  Howes, Po-Yao Huang, Shang-Wen Li, Ishan Misra, Michael Rabbat, Vasu Sharma,
+  Gabriel Synnaeve, Hu~Xu, Herv{\'e} Jegou, Julien Mairal, Patrick Labatut,
+  Armand Joulin, and Piotr Bojanowski.
+\newblock Dinov2: Learning robust visual features without supervision.
+\newblock {\em Transactions on Machine Learning Research}, 2024.
+
+\bibitem{park2020nlspn}
+Jinsun Park, Kyungdon Joo, Zhe Hu, Chi-Kuei Liu, and In~So Kweon.
+\newblock Non-local spatial propagation network for depth completion.
+\newblock In {\em Proceedings of the European Conference on Computer Vision},
+  2020.
+
+\bibitem{yang2024depthanything}
+Lihe Yang, Bingyi Kang, Zilong Huang, Xiaogang Xu, Jiashi Feng, and Hengshuang
+  Zhao.
+\newblock Depth anything: Unleashing the power of large-scale unlabeled data.
+\newblock In {\em Proceedings of the IEEE/CVF Conference on Computer Vision and
+  Pattern Recognition}, pages 10371--10381, 2024.
+
+\bibitem{yeshwanth2023scannetpp}
+Chandan Yeshwanth, Yueh-Cheng Liu, Matthias Nie{\ss}ner, and Angela Dai.
+\newblock Scannet++: A high-fidelity dataset of 3d indoor scenes.
+\newblock In {\em Proceedings of the IEEE/CVF International Conference on
+  Computer Vision}, pages 12--22, 2023.
+
+\end{thebibliography}
