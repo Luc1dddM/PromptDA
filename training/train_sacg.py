@@ -77,6 +77,7 @@ def parse_args():
     p.add_argument("--simple_hidden_channels", type=int, default=56)
     p.add_argument("--learnable_lidar", type=str2bool, default=False)
     p.add_argument("--ablate_lidar", type=str2bool, default=False)
+    p.add_argument("--ablate_gate", type=str2bool, default=False)
 
     p.add_argument("--run_name", type=str, default="sacg")
     p.add_argument("--checkpoint_dir", type=str, default="./checkpoints")
@@ -211,6 +212,7 @@ def build_model(args, device: torch.device) -> nn.Module:
             sacg_ckpt=None,
             learnable_lidar=args.learnable_lidar,
             ablate_lidar=args.ablate_lidar,
+            ablate_gate=args.ablate_gate,
         ).to(device)
     freeze_check(model, args.refiner)
     return model
@@ -377,6 +379,8 @@ def run_compare_inference(args, ckpt_dir: Path):
         command.append("--learnable_lidar")
     if args.ablate_lidar:
         command.append("--ablate_lidar")
+    if args.ablate_gate:
+        command.append("--ablate_gate")
     if args.compare_save_visuals:
         command.append("--save_visuals")
 
@@ -386,9 +390,11 @@ def run_compare_inference(args, ckpt_dir: Path):
 
 def main():
     args = parse_args()
+    if args.ablate_gate and args.gate_weight != 0.0:
+        raise ValueError("--ablate_gate True requires --gate_weight 0.0")
     if args.refiner == "simple":
-        if args.learnable_lidar or args.ablate_lidar:
-            raise ValueError("--learnable_lidar and --ablate_lidar apply only to --refiner sacg")
+        if args.learnable_lidar or args.ablate_lidar or args.ablate_gate:
+            raise ValueError("SACG LiDAR/gate ablation flags apply only to --refiner sacg")
         if args.use_boundary_loss or args.gate_weight != 0.0:
             raise ValueError(
                 "The simple baseline must use plain L1: pass --use_boundary_loss False --gate_weight 0.0"

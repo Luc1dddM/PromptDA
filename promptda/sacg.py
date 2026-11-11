@@ -60,6 +60,7 @@ class SACGModule(nn.Module):
         learnable_lidar: bool = False,
         lidar_kernel_size: int = 31,
         ablate_lidar: bool = False,
+        ablate_gate: bool = False,
     ):
         super().__init__()
         self.rgb_channels = rgb_channels
@@ -67,11 +68,12 @@ class SACGModule(nn.Module):
         self.lidar_sigma = lidar_sigma
         self.learnable_lidar = learnable_lidar
         self.ablate_lidar = ablate_lidar
+        self.ablate_gate = ablate_gate
 
         gate_in_channels = 3
         refine_in_channels = rgb_channels + 1 + dpt_channels
 
-        self.gate_net = nn.Sequential(
+        self.gate_net = None if ablate_gate else nn.Sequential(
             _conv_block(gate_in_channels, 16),
             nn.Conv2d(16, 1, kernel_size=3, stride=1, padding=1),
         )
@@ -147,8 +149,11 @@ class SACGModule(nn.Module):
         else:
             f_lidar = self.compute_lidar_field(sparse, target_hw=d_coarse.shape[-2:])
 
-        gate_in = torch.cat([c_grad, f_lidar, d_coarse], dim=1)
-        gate_map = torch.sigmoid(self.gate_net(gate_in))
+        if self.ablate_gate:
+            gate_map = torch.ones_like(d_coarse)
+        else:
+            gate_in = torch.cat([c_grad, f_lidar, d_coarse], dim=1)
+            gate_map = torch.sigmoid(self.gate_net(gate_in))
 
         refine_inputs = [rgb, d_coarse]
         dpt_feat_resized = None
@@ -221,6 +226,7 @@ class PromptDASACG(nn.Module):
         sacg_ckpt: Optional[str] = None,
         learnable_lidar: bool = False,
         ablate_lidar: bool = False,
+        ablate_gate: bool = False,
     ) -> "PromptDASACG":
         promptda = PromptDA.from_pretrained(
             pretrained_model_name_or_path=promptda_ckpt,
@@ -233,6 +239,7 @@ class PromptDASACG(nn.Module):
             dpt_channels=dpt_channels,
             learnable_lidar=learnable_lidar,
             ablate_lidar=ablate_lidar,
+            ablate_gate=ablate_gate,
         )
         model = cls(promptda=promptda, sacg=sacg)
         if sacg_ckpt is not None:

@@ -37,9 +37,9 @@ case "$dataset" in
 esac
 
 case "$ablation" in
-  fixed_lidar|no_lidar|no_boundary|no_gate|all) ;;
+  fixed_lidar|no_lidar|no_boundary|no_gate_regularization|no_gate_network|all) ;;
   *)
-    echo "Unknown ablation: $ablation (use fixed_lidar, no_lidar, no_boundary, no_gate, or all)" >&2
+    echo "Unknown ablation: $ablation" >&2
     exit 2
     ;;
 esac
@@ -73,8 +73,11 @@ run_one() {
     no_boundary)
       ablation_args+=(--use_boundary_loss False)
       ;;
-    no_gate)
+    no_gate_regularization)
       ablation_args+=(--gate_weight 0.0)
+      ;;
+    no_gate_network)
+      ablation_args+=(--ablate_gate True --gate_weight 0.0)
       ;;
   esac
 
@@ -98,7 +101,7 @@ run_one() {
 }
 
 datasets=(arkitscenes scannetpp)
-ablations=(fixed_lidar no_lidar no_boundary no_gate)
+ablations=(fixed_lidar no_lidar no_boundary no_gate_regularization no_gate_network)
 
 if [[ "$dataset" != "all" ]]; then
   datasets=("$dataset")

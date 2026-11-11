@@ -62,6 +62,7 @@ def parse_args():
     )
     p.add_argument("--learnable_lidar", action="store_true")
     p.add_argument("--ablate_lidar", action="store_true")
+    p.add_argument("--ablate_gate", action="store_true")
 
     p.add_argument("--batch_size", type=int, default=1)
     p.add_argument("--output_dir", type=str, default="results/sacg_compare")
@@ -161,8 +162,8 @@ def main():
     ).to(device).eval()
 
     if args.refiner == "simple":
-        if args.learnable_lidar or args.ablate_lidar:
-            raise ValueError("LiDAR SACG flags cannot be combined with --refiner simple")
+        if args.learnable_lidar or args.ablate_lidar or args.ablate_gate:
+            raise ValueError("SACG LiDAR/gate flags cannot be combined with --refiner simple")
         sacg_model = PromptDASimpleRefiner.from_pretrained(
             encoder=args.encoder,
             promptda_ckpt=args.baseline_ckpt,
@@ -178,6 +179,7 @@ def main():
             sacg_ckpt=args.sacg_ckpt,
             learnable_lidar=args.learnable_lidar,
             ablate_lidar=args.ablate_lidar,
+            ablate_gate=args.ablate_gate,
         ).to(device).eval()
 
     baseline_metrics = []

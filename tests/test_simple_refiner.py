@@ -25,3 +25,16 @@ def test_simple_refiner_is_parameter_matched_to_vitl_sacg_head():
     sacg_params = sum(parameter.numel() for parameter in sacg.parameters())
 
     assert 0.8 <= simple_params / sacg_params <= 1.2
+
+
+def test_sacg_without_gate_network_applies_residual_directly():
+    model = SACGModule(dpt_channels=0, hidden_channels=8, ablate_gate=True).eval()
+    rgb = torch.rand(2, 3, 28, 42)
+    coarse = torch.rand(2, 1, 28, 42)
+    sparse = torch.rand(2, 1, 7, 14)
+
+    output = model(rgb=rgb, sparse=sparse, d_coarse=coarse)
+
+    assert model.gate_net is None
+    torch.testing.assert_close(output.gate_map, torch.ones_like(coarse))
+    torch.testing.assert_close(output.refined_depth, coarse + output.delta_depth)
