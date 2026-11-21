@@ -1,14 +1,19 @@
 \section{Reproducibility and Evidence Ledger}
-This appendix records the exact sources of the evaluation numbers quoted in the paper, so that new runs can be distinguished from prior development results. These are \emph{stored experiment outputs}; we have not independently rerun their checkpoints for this manuscript.
+This appendix identifies the evaluation sources for all claims. They are stored experiment outputs from the latest \texttt{Lamns\_v4\_SACG} experiment branch (lowercase v4); the writing branch is \texttt{Lamns\_V4\_SACG} (uppercase V4). No checkpoints were rerun when preparing this revised manuscript.
 
-\subsection{Model and Training Implementation}
-The added module and loss are implemented in \texttt{promptda/sacg.py}, the training protocol in \texttt{training/train\_sacg.py}, and the comparison protocol in \texttt{compare\_inference.py}. Preprocessing lives in \texttt{dataset/dataset.py} and \texttt{dataset/scannetpp.py}; the metric formulas are implemented in \texttt{training/metrics.py}. The frozen-backbone check verifies that the PromptDA weights have \texttt{requires\_grad=False}. The optimizer updates only the parameters of the attached refinement module.
+\subsection{Implementation and Training}
+The gated module and constant-gate intervention are in \texttt{promptda/sacg.py}; training and evaluation flags are in \texttt{training/train\_sacg.py} and \texttt{compare\_inference.py}. The implementation computes $G\equiv1$ with \texttt{ablate\_gate=True}, without constructing a gate network. The no-gate-loss condition instead leaves the learned gate network intact and sets \texttt{gate\_weight=0.0}. Both matching gate-ablation conditions use the original boundary loss. Specific experiment scripts are \texttt{scripts/run\_arkitscenes\_no\_gate\_network\_explicit.sh} and \texttt{scripts/run\_scannetpp\_no\_gate\_network\_explicit.sh}.
 
-\subsection{Recorded ARKitScenes Comparisons}
-The seed-10 selected no-boundary model was evaluated in \texttt{results/sacg\_arkitscenes\_ablation\_no\_boundary\_fair\_v1\_seed\_10/comparison\_results.json}. The full-objective result comes from \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_10\_learnable/comparison\_results.json}. The simple CNN comparator is in \texttt{results/simple\_refiner\_arkitscenes\_fair\_v1\_seed\_10/comparison\_results.json}. Corresponding no-LiDAR and fixed-LiDAR field results are stored under \texttt{results/sacg\_arkitscenes\_ablation\_no\_lidar\_fair\_v1\_seed\_10/} and \texttt{results/sacg\_arkitscenes\_ablation\_fixed\_lidar\_fair\_v1\_seed\_10/}. All share a 5,599-frame evaluation manifest.
+\subsection{Recorded Comparison Artifacts}
+For each seed $s\in\{10,26,42\}$, the selected model is recorded in:
+\begin{itemize}
+\item \texttt{results/sacg\_arkitscenes\_ablation\_no\_boundary\_fair\_v1\_seed\_$s$/comparison\_results.json};
+\item \texttt{results/sacg\_scannetpp\_ablation\_no\_boundary\_fair\_v1\_seed\_$s$/comparison\_results.json}.
+\end{itemize}
+The learned-gate no-gate-loss control uses the corresponding paths with \texttt{no\_gate} instead of \texttt{no\_boundary}; the constant-gate ablation uses \texttt{no\_gate\_network}. Simple CNN results are in \texttt{results/simple\_refiner\_arkitscenes\_fair\_v1\_seed\_$s$/} and \texttt{results/simple\_refiner\_scannetpp\_20k\_fair\_v1\_seed\_$s$/}. Earlier full-objective results reside in \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_$s$\_learnable/} and \texttt{results/scannetpp\_20k\_fair\_v1\_seed\_$s$\_learnable/}. LiDAR-field ablations use \texttt{fixed\_lidar} and \texttt{no\_lidar} in the corresponding folder names.
 
-\subsection{Recorded Additional Runs}
-ARKitScenes full-objective seeds 26 and 42 are in \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_26\_learnable/} and \texttt{results/arkit\_sacg\_all\_fair\_v1\_seed\_42\_learnable/}. ScanNet++ full-objective runs are under \texttt{results/scannetpp\_20k\_fair\_v1\_seed\_\{10,26,42\}\_learnable/}. These paths should not be cited as evidence for the selected no-boundary objective.
+\subsection{Evaluation Manifests and Statistical Scope}
+All ARKitScenes models share the 5,599-frame evaluation manifest with SHA-256 prefix \texttt{5b8a182fd4fba0d}. The ScanNet++ 2,000-frame manifests differ among seeds: seed 10 begins \texttt{0a655fd15dca1b0e9}, seed 26 begins \texttt{52f5580059c09c17}, and seed 42 begins \texttt{d330b4b2d6661b5e}. Models compared within each seed use the same frames. Tables report the unweighted mean of three run-level aggregates, themselves computed as means of per-image metrics; they are not a pooled all-frame estimate or a scene-bootstrap confidence interval.
 
-\subsection{Remaining Experiments}
-A submission-ready manuscript would require SACG-NoB at multiple training seeds with the same fixed data-selection seed, a matched-input simple CNN, a constant-gate ablation, ablations of gradient agreement and learned LiDAR field under the selected objective, an independent held-out test evaluation, and runtime and error-map analysis. Claims should be revised after those measurements are completed.
+\subsection{Outstanding Verification}
+Before final submission we recommend: (i) fixed evaluation and training subsets across all ScanNet++ training seeds; (ii) a gate-versus-constant-gate ablation under the \emph{selected} no-boundary objective; (iii) gate-input, DPT-feature, and validity-field factorial ablations; (iv) a final scene-held-out test and scene-bootstrap intervals; (v) geometry-derived boundary quality and spatial error-stratification analyses; and (vi) training/inference resource measurements. Such experiments may change the conclusions and are not asserted as completed here.
