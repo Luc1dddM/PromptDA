@@ -1,0 +1,69 @@
+{
+  "protocol": {
+    "config": {
+      "dataset": "arkitscenes",
+      "data_seed": 42,
+      "data_root": "/media/naeem/T7/ArKitScene/ARKitScenes-main/data/upsampling",
+      "image_height": 756,
+      "image_width": 1008,
+      "depth_scale": 1000.0,
+      "ignore_rgb_masks": false,
+      "split": "val",
+      "max_samples": null,
+      "num_workers": 4,
+      "seed": 42,
+      "encoder": "vitl",
+      "dpt_variant": "legacy",
+      "refiner": "sacg",
+      "simple_hidden_channels": 56,
+      "baseline_ckpt": null,
+      "sacg_ckpt": "checkpoints/sacg_arkitscenes_ablation_no_gate_network_fair_v1_vitl_legacy_42_sacg_learnable/best.pth",
+      "learnable_lidar": true,
+      "ablate_lidar": false,
+      "ablate_gate": true,
+      "batch_size": 1,
+      "output_dir": "results/sacg_arkitscenes_ablation_no_gate_network_fair_v1_seed_42",
+      "save_visuals": true,
+      "save_predictions": false,
+      "num_visuals": 8
+    },
+    "frame_count": 5599,
+    "frame_sha256": "5b8a182fd4fba0dead6371b54d15c96974d7f5f853074b210b7c50ea3f3dd2b9",
+    "aggregation": "mean_per_image",
+    "depth_units": "metres",
+    "minimum_gt_depth": 0.01
+  },
+  "baseline": {
+    "AbsRel": 0.011504706764049133,
+    "BoundaryAbsRel": 0.02059790653197065,
+    "L1": 0.013479376430329648,
+    "RMSE": 0.0319495298367015,
+    "SSIM": 0.9924462279567493,
+    "delta0.5": 0.9927205677957786,
+    "delta1": 0.99729086003318,
+    "delta2": 0.9992707968184003,
+    "delta3": 0.9997620449936545
+  },
+  "sacg": {
+    "AbsRel": 0.011510505062731885,
+    "BoundaryAbsRel": 0.020682198314394076,
+    "L1": 0.013417491088472447,
+    "RMSE": 0.031915493947318234,
+    "SSIM": 0.9901360574613809,
+    "delta0.5": 0.992711875359487,
+    "delta1": 0.9972915130122301,
+    "delta2": 0.999271567995409,
+    "delta3": 0.999761767197047
+  },
+  "improvements_percent": {
+    "AbsRel": -0.05039931709462593,
+    "BoundaryAbsRel": -0.4092247985013098,
+    "L1": 0.45911097049606725,
+    "RMSE": 0.10653013958017957,
+    "SSIM": -0.2327753793620698,
+    "delta0.5": -0.0008756176194952882,
+    "delta1": 6.54752860648771e-05,
+    "delta2": 7.717397560640915e-05,
+    "delta3": -2.778627235426786e-05
+  }
+}
