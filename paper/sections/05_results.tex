@@ -1,93 +1,79 @@
 \section{Results and Analysis}
 \label{sec:results}
-We first compare SACG against frozen PromptDA and a separately trained ungated CNN on the same ARKitScenes validation frames. We then analyze existing component ablations, discuss the earlier three-seed full-objective experiments, and examine what can and cannot be concluded from the ScanNet++ export. All quantitative values in this section are transcribed from versioned comparison artifacts in the repository; no additional checkpoint evaluation was performed when writing this manuscript.
+All results below are aggregates of versioned repository evaluation artifacts, not newly rerun checkpoints. We report three seeds (10, 26, 42) for both datasets. The central architectural question is tested by comparing the same residual network with a learned gate against the constant-gate variant $G\equiv1$, trained from scratch under the same boundary-weighted objective and with gate regularization disabled. Separately, SACG-NoB is the accuracy-selected configuration; the plain CNN is a system-level reference with different input features.
 
-\subsection{Comparison With Frozen PromptDA and a Plain CNN}
-Table~\ref{tab:main_results} presents the most relevant same-frame comparison for selecting the working SACG configuration. All methods use the same 5,599 ARKitScenes validation frames, with a matching evaluation manifest. Frozen PromptDA produces an AbsRel of 0.011505 and an L1 error of 0.013479\,m. Adding the independently trained simple CNN lowers these measures to 0.011321 and 0.013257\,m, respectively. Thus, substantial portions of the available improvement over the frozen predictor can already be obtained by a conventional small residual head.
+\subsection{Multi-Seed Accuracy of the Selected Refiner}
+Table~\ref{tab:main_results} gives three-seed mean validation metrics. ARKitScenes uses the same 5,599 evaluation frames for every run. ScanNet++ uses 2,000 frames per run; the frame subset changes with the seed, but all variants within each seed are evaluated on the same subset. Cross-seed means therefore describe the recorded configurations, not a clean estimate of variance from initialization alone.
 
 \begin{table*}[t]
-\caption{ARKitScenes seed-10 evaluation on the same 5,599 validation frames. Best in each column is shown in bold. Error metrics are lower-is-better; SSIM is higher-is-better. Values are mean-per-frame aggregates, not independent replicate means.}
+\caption{Three-seed mean validation results. Error metrics are lower-is-better; SSIM is higher-is-better. Boundary denotes RGB-edge-conditioned BoundaryAbsRel, not ground-truth depth-edge accuracy.}
 \label{tab:main_results}
-\centering
-\begin{tabular}{lccccc}
+\centering\small
+\begin{tabular}{llccccc}
 \toprule
-Method & AbsRel $\downarrow$ & L1 (m) $\downarrow$ & RMSE (m) $\downarrow$ & RGB-edge BoundaryAbsRel $\downarrow$ & SSIM $\uparrow$\\
+Dataset & Method & AbsRel $\downarrow$ & L1 (m) $\downarrow$ & RMSE (m) $\downarrow$ & Boundary $\downarrow$ & SSIM $\uparrow$\\
 \midrule
-Frozen PromptDA & 0.011505 & 0.013479 & 0.031950 & 0.020598 & \textbf{0.992446}\\
-Frozen PromptDA + simple CNN & 0.011321 & 0.013257 & \textbf{0.031793} & \textbf{0.020335} & 0.992247\\
-Frozen PromptDA + full SACG & 0.011358 & 0.013305 & 0.031846 & 0.020446 & 0.992147\\
-Frozen PromptDA + SACG-NoB (selected) & \textbf{0.011298} & \textbf{0.013227} & 0.031803 & 0.020382 & 0.992149\\
+ARKitScenes & Frozen PromptDA & 0.011505 & 0.013479 & 0.031950 & 0.020598 & \textbf{0.992446}\\
+& Simple CNN & \textbf{0.011310} & \textbf{0.013242} & \textbf{0.031778} & \textbf{0.020330} & 0.992136\\
+& SACG-NoB (selected) & 0.011318 & 0.013259 & 0.031822 & 0.020392 & 0.992065\\
+\midrule
+ScanNet++ & Frozen PromptDA & 0.029222 & 0.048781 & 0.132182 & \textbf{0.052181} & \textbf{0.962640}\\
+& Simple CNN & 0.029066 & \textbf{0.048128} & \textbf{0.130082} & 0.052646 & \textbf{0.962675}\\
+& SACG-NoB (selected) & \textbf{0.029035} & 0.048235 & 0.131196 & 0.052222 & 0.962190\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-The selected configuration, SACG-NoB, improves AbsRel by approximately 1.79\% and L1 by 1.87\% compared with frozen PromptDA. It also achieves a lower error than the simple CNN on both metrics. The absolute difference between SACG-NoB and the CNN is, however, only about $2.21\times10^{-5}$ in AbsRel and $2.94\times10^{-5}$\,m in L1. Without repeated training runs or a paired scene-level uncertainty analysis, it would be inappropriate to infer that such a narrow margin is stable.
+SACG-NoB reduces mean AbsRel relative to frozen PromptDA by approximately 1.63\% on ARKitScenes and 0.64\% on the local ScanNet++ export; mean L1 reductions are approximately 1.63\% and 1.12\%, respectively. These gains require downstream supervised adaptation and are not zero-shot improvements. The three-seed CNN results also correct a misleading impression from an earlier single-seed comparison: on ARKitScenes, the simple CNN now has slightly lower mean AbsRel and L1 and better RMSE, RGB-edge-conditioned error, and SSIM than SACG-NoB. On ScanNet++, SACG-NoB has marginally lower mean AbsRel and BoundaryAbsRel than the CNN, but the CNN has better mean L1, RMSE, and SSIM. We therefore do not claim general superiority over conventional CNN refinement.
 
-Not all metrics favor SACG-NoB. The simple CNN has lower RMSE (0.031793 versus 0.031803\,m) and lower RGB-edge-conditioned relative error (0.020335 versus 0.020382). The frozen baseline also has the highest auxiliary SSIM. This mixed pattern is informative: improving mean absolute error does not necessarily improve larger squared errors, boundary-adjacent regions, or image-level structural similarity. A selective adapter must be evaluated beyond a single aggregate metric, particularly if it is intended for geometric reconstruction.
-
-\subsection{Effects of the Boundary-Weighted Training Term}
-The earlier full SACG objective used the edge-weighted loss defined in Eq.~\eqref{eq:lboundary}. On the same seed-10 validation subset, removing this term reduces AbsRel from 0.011358 to 0.011298 and L1 from 0.013305 to 0.013227\,m. It also reduces the RGB-edge boundary metric from 0.020446 to 0.020382. Consequently, the code's selected architecture and correction pathways are kept intact while the additional boundary loss is disabled.
-
-This is an objective ablation, not evidence that geometric depth edges are unimportant. The old weighting grows exponentially with normalized RGB edge magnitude, and image edges include both geometric and photometric effects. Moreover, the implementation averages the weighted error over all pixels rather than normalizing by the number of valid target pixels. Those design choices offer hypotheses for the observed behavior but do not demonstrate a causal mechanism. A rigorous analysis should inspect error versus RGB-edge strength, actual ground-truth depth discontinuities, and depth sparsity.
-
-\subsection{Sensitivity to LiDAR-Validity Guidance}
-Table~\ref{tab:ablation_results} records three related architecture variants and the selected loss variant. With the original boundary supervision enabled, removing the validity field from the gate raises AbsRel to 0.011396, whereas replacing it with the fixed distance-transform field produces 0.011420. The learnable-field full model obtains 0.011358 under that loss. This suggests that an adaptive validity field may be beneficial \emph{within the full-boundary objective}.
-
-\begin{table}[t]
-\caption{ARKitScenes seed-10 ablations. Unless otherwise stated, rows retain the original boundary-weighted loss. The no-field intervention concerns SACG's gate only; the frozen base model still consumes metric LiDAR.}
-\label{tab:ablation_results}
-\centering\small
-\begin{tabular}{lccc}
-\toprule
-SACG configuration & AbsRel & L1 (m) & BoundaryAbsRel\\
-\midrule
-Full (+ boundary) & 0.011358 & 0.013305 & 0.020446\\
-No LiDAR gate field & 0.011396 & 0.013351 & 0.020497\\
-Fixed LiDAR gate field & 0.011420 & 0.013385 & 0.020480\\
-No boundary loss & \textbf{0.011298} & \textbf{0.013227} & \textbf{0.020382}\\
-\bottomrule
-\end{tabular}
-\end{table}
-
-These findings \emph{do not} establish that the learnable validity field is necessary for SACG-NoB, because the field ablations and selected method were trained with different objectives. The appropriate follow-up is a factorial experiment holding the objective fixed while removing or replacing the field. Similarly, a no-gate-loss experiment is not equivalent to replacing the learned gate by the constant value one: the former changes regularization, whereas the latter removes the gating function itself.
-
-\subsection{Full-SACG Multi-Seed Evidence}
-Table~\ref{tab:full_seeds} reports three existing ARKitScenes training seeds, all for SACG \emph{with} boundary-weighted supervision. Each gives lower L1 and AbsRel than the frozen PromptDA baseline, but the magnitude of improvement changes. The values should not be presented as three trials of SACG-NoB; the selected configuration has one committed validation comparison in the inspected repository snapshot.
-
-\begin{table}[t]
-\caption{Existing ARKitScenes runs for full SACG \emph{with boundary loss}. These do not measure the repeatability of the selected no-boundary configuration.}
-\label{tab:full_seeds}
-\centering
-\begin{tabular}{rccc}
-\toprule
-Training seed & AbsRel & L1 (m) & RMSE (m)\\
-\midrule
-10 & 0.011358 & 0.013305 & 0.031846\\
-26 & 0.011399 & 0.013365 & 0.031891\\
-42 & 0.011376 & 0.013315 & 0.031876\\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{ScanNet++ Results: Evidence for an Earlier Variant}
-We also inspected the existing local ScanNet++ export evaluations. Table~\ref{tab:scannet_results} contrasts frozen PromptDA with full SACG, again including the boundary-weighted loss. Relative improvements on these local evaluations are smaller than those seen in ARKitScenes, but the full model decreases L1 and AbsRel in each recorded run. This suggests that refinement may remain useful outside ARKitScenes for the \emph{earlier objective}, but it says nothing definitive about transfer of SACG-NoB.
+\subsection{Direct Evidence for the Learned Gate}
+Table~\ref{tab:gate_ablation} compares a trained gate with an otherwise unchanged residual network using $G\equiv1$. Both variants retain the boundary-weighted loss and set the auxiliary gate-loss coefficient to zero; this is a loss-matched architectural ablation, not a comparison with the selected SACG-NoB objective.
 
 \begin{table*}[t]
-\caption{Local ScanNet++ export, 2,000 validation frames for each run; \emph{full SACG with boundary loss}. The evaluation subset changes with the seed, so comparisons are paired only within each row. No SACG-NoB ScanNet++ measurements are claimed.}
-\label{tab:scannet_results}
-\centering
-\begin{tabular}{rcccccc}
+\caption{Controlled gate-network ablation (three-seed mean; both rows use original boundary supervision and $\lambda_g=0$). The learned-gate rows retain the gate network but omit its auxiliary regularizer.}
+\label{tab:gate_ablation}
+\centering\small
+\begin{tabular}{llccccc}
 \toprule
-Seed & Baseline AbsRel & Full SACG AbsRel & Baseline L1 (m) & Full SACG L1 (m) & Baseline RMSE (m) & Full SACG RMSE (m)\\
+Dataset & Architecture & AbsRel $\downarrow$ & L1 (m) $\downarrow$ & RMSE (m) $\downarrow$ & Boundary $\downarrow$ & SSIM $\uparrow$\\
 \midrule
-10 & 0.029730 & 0.029613 & 0.048934 & 0.048479 & 0.133044 & 0.131989\\
-26 & 0.028579 & 0.028510 & 0.048643 & 0.048400 & 0.131430 & 0.130808\\
-42 & 0.029356 & 0.029263 & 0.048766 & 0.048388 & 0.132073 & 0.131250\\
+ARKitScenes & $G\equiv1$ (no gate network) & 0.011430 & 0.013357 & 0.031887 & 0.020559 & 0.989689\\
+& Learned $G$, no gate loss & \textbf{0.011350} & \textbf{0.013297} & \textbf{0.031858} & \textbf{0.020419} & \textbf{0.992211}\\
+\midrule
+ScanNet++ & $G\equiv1$ (no gate network) & 0.029420 & 0.048759 & 0.131238 & 0.052881 & 0.961609\\
+& Learned $G$, no gate loss & \textbf{0.029118} & \textbf{0.048296} & \textbf{0.130922} & \textbf{0.052352} & \textbf{0.962243}\\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-The training-seed and dataset-subset-seed settings change together between these rows. As a result, the displayed differences across seeds reflect both optimization variability and different selected frames. An informative future evaluation would fix both the training frame manifest and validation/test frame manifests for all model seeds. Only then could mean differences and uncertainty due to training initialization be interpreted cleanly.
+The learned gate reduces mean AbsRel by 0.70\% and L1 by 0.45\% relative to the ungated counterpart on ARKitScenes, and by 1.03\% and 0.95\%, respectively, on ScanNet++. The gated variant has lower AbsRel, L1, RMSE, and BoundaryAbsRel, and higher SSIM, in all six seed-matched comparisons across the two datasets. This is the strongest evidence for explicitly learned spatial modulation within the tested residual architecture. It does not establish which individual cue causes the gain or imply superiority over a separately designed CNN.
 
-\subsection{Implications for the Architectural Hypothesis}
-The strongest conclusion supported by the recorded results is that a small supervised adapter can improve a high-quality frozen prompt-conditioned depth model without altering the original pretrained weights. Whether \emph{consistency-gated adaptation} provides a substantial, reproducible advantage over a suitably controlled ungated adapter is still unresolved. The closest empirical comparison shows only a very small L1 and AbsRel gap, with opposing trends on other metrics. This finding directly motivates the controlled experiments described next rather than an unsupported claim of state-of-the-art depth accuracy.
+\begin{table}[t]
+\caption{Seed-level AbsRel in the matched gate-network ablation; lower is better. Within each row the evaluation frames are identical.}
+\label{tab:gate_seeds}
+\centering\small
+\begin{tabular}{llcc}
+\toprule
+Dataset & Seed & $G\equiv1$ & Learned $G$\\
+\midrule
+ARKitScenes & 10 & 0.011402 & \textbf{0.011346}\\
+& 26 & 0.011376 & \textbf{0.011361}\\
+& 42 & 0.011511 & \textbf{0.011342}\\
+\midrule
+ScanNet++ & 10 & 0.029919 & \textbf{0.029563}\\
+& 26 & 0.028796 & \textbf{0.028534}\\
+& 42 & 0.029546 & \textbf{0.029259}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Loss-Ablation and LiDAR-Field Findings}
+The selected SACG-NoB omits the exponentially RGB-edge-weighted boundary term but retains the gradient-consistency cue in its gate and delayed gate regularization. Over the three seeds, ARKitScenes full-objective SACG has mean AbsRel 0.011378 and L1 0.013328, compared with 0.011318 and 0.013259 for SACG-NoB. On ScanNet++, full-objective mean AbsRel and L1 are 0.029128 and 0.048422, compared with 0.029035 and 0.048235 for SACG-NoB. This identifies an empirically useful objective choice, but does not demonstrate that geometric boundaries are unnecessary.
+
+Under the original full-boundary objective, replacing the learned LiDAR-validity field with a fixed field or zeros worsens mean AbsRel on ARKitScenes (learned full SACG: 0.011378; fixed: 0.011397; field removed: 0.011403) and ScanNet++ (learned full SACG: 0.029128; fixed: 0.029195; field removed: 0.029205). Because these field ablations were not conducted under the selected no-boundary objective, their outcome cannot be attributed to the selected configuration. The no-LiDAR-field ablation removes this field from the gate only: frozen PromptDA still consumes the metric LiDAR prompt.
+
+\subsection{Interpreting Boundary and Structural Metrics}
+The gate-network ablation improves RGB-edge-conditioned BoundaryAbsRel, but this statistic uses an RGB Sobel edge mask rather than verified ground-truth depth discontinuities. On ScanNet++, SACG-NoB's mean BoundaryAbsRel (0.052222) remains slightly higher than frozen PromptDA's (0.052181), even though it is lower than the CNN's (0.052646). The frozen baseline also has the highest mean auxiliary SSIM on ARKitScenes. Consequently, neither the new gate ablation nor the selected refiner results establish geometric boundary preservation or a general increase in structural fidelity.
+
+\subsection{Attribution and Generalization Limits}
+The matched $G\equiv1$ comparison provides evidence for the gate under a shared boundary-weighted objective. It does not isolate the validity field, gradient agreement, and coarse-depth cues individually, or show that the selected SACG-NoB objective has the same gate-specific advantage under its own loss. Validation was used to select objectives and checkpoints. ScanNet++ training/data-selection seeds co-vary, so the three results are not a pure initialization-variance experiment. We have not computed scene-bootstrap confidence intervals, reported independent held-out test results, or measured deployment costs. The supported claim is a consistent benefit of the learned spatial gate in a controlled residual-architecture comparison, while the best overall refiner remains metric- and dataset-dependent.
