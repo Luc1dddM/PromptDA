@@ -1,17 +1,19 @@
-# SACG journal manuscript (IEEE Access target)
+# SACG manuscript — updated gate-network ablation (November 2026)
 
-This repository contains a revised and expanded LaTeX manuscript. IEEE Access is a tentative journal target. The current main.tex still uses a generic two-column article class: it is NOT the official IEEE Access submission template.
+This is a working, venue-neutral LaTeX manuscript (IEEE Access is a tentative target, not the current official document class).
 
-To compile from the paper directory:
+Compile in `paper/` with:
 
-    latexmk -pdf -interaction=nonstopmode -file-line-error main.tex
+```bash
+latexmk -pdf -interaction=nonstopmode -file-line-error main.tex
+```
 
-A TeX distribution with TikZ, natbib, and the standard math packages is needed. Keep all sections/ files next to main.tex.
+**Current central claim:** Under matched residual inputs and boundary-weighted training objectives, a learned spatial gate improves AbsRel over the same residual with `G=1` in all three ARKitScenes seed runs and all three paired ScanNet++ seed/subset runs. The mean relative AbsRel improvements against the ungated counterpart are 0.70% and 1.03%, respectively. Importantly, both gated and ungated variants in this *architectural ablation* have **gate regularization disabled** and retain **boundary-weighted supervision**.
 
-The main working SACG method retains the learned LiDAR-validity field and delayed gate regularization but omits the boundary-weighted loss. The best supported comparison is one seed on 5,599 ARKitScenes validation frames. The result is metric-specific, not established across seeds or held-out scenes.
+**Selected accuracy-focused configuration:** SACG-NoB removes the boundary loss (but retains gate regularization). It improves three-seed mean AbsRel over frozen PromptDA by 1.63% on ARKitScenes and 0.64% on the local ScanNet++ export. The constant-gate result above **does not isolate** gate contribution specifically under this selected loss and must not be used to imply it does.
 
-Existing three-seed ARKitScenes and ScanNet++ numbers correspond to the EARLIER full SACG training objective, not the selected no-boundary method. Simple CNN is a separate trainable refiner on FROZEN PromptDA, not PromptDA finetuning.
+**CNN comparisons:** The simple CNN has slightly better mean metrics than SACG-NoB on ARKitScenes across three seeds. ScanNet++ results are mixed and metric-dependent. The CNN uses a different feature interface, so the gate's causal effect should be attributed to the matched same-residual ablation, not the CNN comparison.
 
-Before submitting, migrate into the current official journal template from https://ieeeaccess.ieee.org/author-center/, fix author information and disclosures, add independently held-out evaluations, reproduce checkpoints, measure trainable parameters and inference resources, and conduct matched-input/constant-gate ablations.
+The writing branch is `Lamns_V4_SACG` (uppercase V4). The up-to-date results and code are on `Lamns_v4_SACG` (lowercase v4), head `bc9b750b8eba8bdddf3bdd7c079029167961264c` when this revision was prepared. The paper cites stored evaluation JSON from the experiment branch without copying experiment files into the manuscript branch or rerunning the checkpoints.
 
-See SOURCE_MAP.md and EXPERIMENTS_TODO.md for provenance and remaining work. The manuscript was composed from existing repository source and stored evaluation JSON; no new experiments were run as part of drafting.
+All results are validation results, not independent held-out test scores; ScanNet++ uses different 2,000-frame subsets for seeds 10/26/42. The manuscript still requires independent tests, mechanism-based spatial analysis, resource/latency measurement, and migration to an actual journal template before submission. See `SOURCE_MAP.md` and `EXPERIMENTS_TODO.md` for details.
