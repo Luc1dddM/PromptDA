@@ -1,23 +1,23 @@
-# Research-paper source map
+# SACG manuscript: evidence and source map (updated November 2026)
 
-Model and architecture: `promptda/sacg.py` (`SACGModule`, `PromptDASACG`, `SimpleRefinementModule`).
+Source-of-truth experiment branch: `Lamns_v4_SACG` (lowercase v4), commit `bc9b750b8eba8bdddf3bdd7c079029167961264c`. Writing branch: `Lamns_V4_SACG` (uppercase V4). These are different Git refs.
 
-Loss and optimization: `promptda/sacg.py` (`SACGLoss`) and `training/train_sacg.py` (AdamW over `model.sacg.parameters()`, frozen PromptDA).
+Implementation: `promptda/sacg.py` (`SACGModule`, `SimpleRefinementModule`, `SACGLoss`); training: `training/train_sacg.py`; evaluation: `compare_inference.py`; metrics: `training/metrics.py`.
 
-Metrics: `training/metrics.py`; dataset manifests: `dataset/experiment.py`.
+Every line below denotes a seed-dependent path with `{seed}` replaced by 10, 26 or 42, unless indicated otherwise. All evaluation files cited here live on the experiment branch, not the writing branch.
 
-ARKitScenes selected no-boundary, seed 10: `results/sacg_arkitscenes_ablation_no_boundary_fair_v1_seed_10/comparison_results.json`.
+- ARKitScenes SACG-NoBoundary: `results/sacg_arkitscenes_ablation_no_boundary_fair_v1_seed_{seed}/comparison_results.json`.
+- ScanNet++ SACG-NoBoundary: `results/sacg_scannetpp_ablation_no_boundary_fair_v1_seed_{seed}/comparison_results.json`.
+- ARKitScenes no gate *network* (`G=1`): `results/sacg_arkitscenes_ablation_no_gate_network_fair_v1_seed_{seed}/comparison_results.json`.
+- ScanNet++ no gate *network* (`G=1`): `results/sacg_scannetpp_ablation_no_gate_network_fair_v1_seed_{seed}/comparison_results.json`.
+- ARKitScenes no gate *loss*, with learned gate still present: `results/sacg_arkitscenes_ablation_no_gate_fair_v1_seed_{seed}/comparison_results.json`.
+- ScanNet++ no gate *loss*, with learned gate still present: `results/sacg_scannetpp_ablation_no_gate_fair_v1_seed_{seed}/comparison_results.json`.
+- Simple CNN ARKitScenes: `results/simple_refiner_arkitscenes_fair_v1_seed_{seed}/comparison_results.json`.
+- Simple CNN ScanNet++: `results/simple_refiner_scannetpp_20k_fair_v1_seed_{seed}/comparison_results.json`.
+- Full-objective SACG ARKitScenes: `results/arkit_sacg_all_fair_v1_seed_{seed}_learnable/comparison_results.json`.
+- Full-objective SACG ScanNet++: `results/scannetpp_20k_fair_v1_seed_{seed}_learnable/comparison_results.json`.
+- Additional LiDAR gate-field controls: corresponding `fixed_lidar` and `no_lidar` ablation folders.
 
-ARKitScenes full SACG seed 10: `results/arkit_sacg_all_fair_v1_seed_10_learnable/comparison_results.json`.
+The matched gate-network attribution compares no-gate-loss versus no-gate-network under **the original boundary-weighted training objective**. It does not directly attribute SACG-NoBoundary improvements to the gate.
 
-Simple residual CNN seed 10: `results/simple_refiner_arkitscenes_fair_v1_seed_10/comparison_results.json`.
-
-No LiDAR gate field: `results/sacg_arkitscenes_ablation_no_lidar_fair_v1_seed_10/comparison_results.json`.
-
-Fixed LiDAR gate field: `results/sacg_arkitscenes_ablation_fixed_lidar_fair_v1_seed_10/comparison_results.json`.
-
-Full-objective other seeds: `results/arkit_sacg_all_fair_v1_seed_{26,42}_learnable/comparison_results.json`.
-
-Full-objective ScanNet++: `results/scannetpp_20k_fair_v1_seed_{10,26,42}_learnable/comparison_results.json`.
-
-No new model training or independent evaluation was performed while preparing the manuscript. Full SACG and selected no-boundary SACG use different training objectives and must not be pooled.
+ARKitScenes 5,599-frame evaluation manifest is identical for all seeds. ScanNet++ uses 2,000 frames per seed; `data_seed=seed`, so subsets differ among seed runs. All metrics are per-image means aggregated across frames and then averaged across three runs. We have not independently rerun model checkpoints for this revision.
